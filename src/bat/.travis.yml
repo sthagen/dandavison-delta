@@ -4,7 +4,7 @@ matrix:
   include:
     - os: windows
       rust: stable
-      env: TARGET=x86_64-pc-windows-msvc
+      env: TARGET=x86_64-pc-windows-gnu
 
 sudo: required
 
