@@ -97,6 +97,11 @@ pub struct Opt {
     /// apply syntax highlighting to unchanged and new lines only.
     pub highlight_removed: bool,
 
+    #[structopt(long = "retain-plus-minus-markers")]
+    /// Prefix added/removed lines with a +/- character, respectively, exactly as git does. The
+    /// default behavior is to output a space character in place of these markers.
+    pub retain_plus_minus_markers: bool,
+
     #[structopt(long = "commit-style", default_value = "plain")]
     /// Formatting style for the commit section of git output. Options
     /// are: plain, box.
