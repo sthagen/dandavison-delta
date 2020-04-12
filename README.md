@@ -97,7 +97,7 @@ The languages and color themes that ship with delta are those that ship with bat
 
 Delta looks best if your terminal application supports 24 bit colors. See https://gist.github.com/XVilka/8346728. For example, on MacOS, iTerm2 supports 24-bit colors but Terminal.app does not.
 
-If your terminal application does not support 24-bit color, delta will still work, by automatically choosing the closest color from those available. See the `Colors` section of the help output below. 
+If your terminal application does not support 24-bit color, delta will still work, by automatically choosing the closest color from those available. See the `Colors` section of the help output below.
 
 If you're using tmux, it's worth checking that 24 bit color is  working correctly. For example, run a color test script like [this  one](https://gist.githubusercontent.com/lifepillar/09a44b8cf0f9397465614e622979107f/raw/24-bit-color.sh),  or one of the others listed [here](https://gist.github.com/XVilka/8346728). If  you do not see smooth color gradients, see the discussion at  [tmux#696](https://github.com/tmux/tmux/issues/696). The short  version is you need something like this in your `~/.tmux.conf`:
 ```
@@ -111,6 +111,50 @@ and you may then  need to quit tmux completely for it to take effect.
 
 If mouse scrolling is broken, try setting your `BAT_PAGER` environment variable to (at least) `less -R` .
 See [issue #58](https://github.com/dandavison/delta/issues/58) and [bat README / "Using a different pager"](https://github.com/sharkdp/bat#using-a-different-pager).
+
+
+## Using Delta with Magit
+[Magit](https://github.com/magit/magit) is an excellent Git client, implemented in Emacs. Delta can be used to render diffs in magit. The current instructions are:
+
+1. Build branch `customizable-ansi-color-conversion` of Magit:
+    ```sh
+    git clone https://github.com/dandavison/magit.git
+    cd magit
+    git checkout customizable-ansi-color-conversion
+    export BUILD_MAGIT_LIBGIT=
+    make
+    ```
+
+2. `M-x package-install xterm-color`
+
+3. Build branch `magit-delta` of delta:
+    ```sh
+    git clone https://github.com/dandavison/delta.git
+    cd delta
+    git checkout magit-delta
+    cargo build --release
+    ```
+    This creates a delta executable at `target/release/delta`
+
+4. In the delta repo, edit the shell script `magit/delta-git` so that
+   instead of simply referencing "delta" it specifies the absolute
+   path to your delta executable, i.e. `/PATH/TO/delta/target/release/delta`.
+
+5. In your emacs config file add the following:
+    ```emacs-lisp
+    (use-package magit
+      :load-path "/PATH/TO/magit/lisp")
+
+    (use-package xterm-color
+      :load-path "/PATH/TO/xterm-color")
+
+    (setq magit-delta-git-executable "/PATH/TO/delta/magit/delta-git")
+    (load-file "/PATH/TO/delta/magit/magit-delta.el")
+    (magit-delta-mode +1)
+    ```
+
+You can use `M-x magit-delta-mode` to toggle the new magit behavior.
+
 
 ## Options
 Here's the output of `delta --help`. To use these options, add them to the delta command line in your `.gitconfig` file.

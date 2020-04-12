@@ -1,0 +1,38 @@
+#!/bin/bash
+
+OS=$(uname)
+
+[[ -n $GIT_AUTHOR_NAME ]] || GIT_AUTHOR_NAME=$(git config --get user.name || echo "magit-delta-user")
+[[ -n $GIT_AUTHOR_EMAIL ]] || GIT_AUTHOR_EMAIL=$(git config --get user.email || echo "magit-delta-user@example.com")
+[[ -n $GIT_COMMITTER_NAME ]] || GIT_COMMITTER_NAME="$GIT_AUTHOR_NAME"
+[[ -n $GIT_COMMITTER_EMAIL ]] || GIT_COMMITTER_EMAIL="$GIT_AUTHOR_EMAIL"
+
+DOCKER_RUN_ARGS=(
+    -it
+    --volume "$PWD":/host
+    --env "GIT_AUTHOR_NAME=\"$GIT_AUTHOR_NAME\""
+    --env "GIT_AUTHOR_EMAIL=\"$GIT_AUTHOR_EMAIL\""
+    --env "GIT_COMMITTER_NAME=\"$GIT_COMMITTER_NAME\""
+    --env "GIT_COMMITTER_EMAIL=\"$GIT_COMMITTER_EMAIL\""
+)
+
+if [[ "$OS" = Linux ]]; then
+	xhost +
+    DOCKER_RUN_ARGS+=(
+        --env DISPLAY="$DISPLAY"
+        --volume /tmp/.X11-unix:/tmp/.X11-unix
+    )
+elif [[ "$OS" = Darwin ]]; then
+    # 1. brew cask install xquartz
+    # 2. XQuartz Settings -> Security -> "Allow connections from network clients"
+    # 3. Restart XQuartz
+	xhost + 127.0.0.1
+	DOCKER_RUN_ARGS+=(
+        --env DISPLAY=host.docker.internal:0
+    )
+else
+    echo "Unrecognised OS: $OS" 1>&2
+    exit 1
+fi
+
+docker run "${DOCKER_RUN_ARGS[@]}" dandavison7/magit-delta

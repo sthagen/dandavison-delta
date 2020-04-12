@@ -32,4 +32,15 @@ benchmark: build
 chronologer:
 	chronologer performance/chronologer.yaml
 
-.PHONY: build lint test unit-test end-to-end-test release vesion hash benchmark chronologer
+magit-delta-build:
+	docker build -f magit/Dockerfile -t dandavison7/magit-delta .
+
+# On MacOS:
+# 1. brew cask install xquartz
+# 2. XQuartz Settings -> Security -> "Allow connections from network clients"
+# 3. Restart XQuartz
+magit-delta-run:
+	magit/magit-delta-run
+
+
+.PHONY: build lint test unit-test end-to-end-test release vesion hash benchmark chronologer magit-delta-build magit-delta-run
