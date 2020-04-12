@@ -104,12 +104,12 @@ pub fn get_config<'a>(
         font_style: None,
     };
 
-    let minus_line_marker = if opt.retain_plus_minus_markers {
+    let minus_line_marker = if opt.keep_plus_minus_markers {
         "-"
     } else {
         " "
     };
-    let plus_line_marker = if opt.retain_plus_minus_markers {
+    let plus_line_marker = if opt.keep_plus_minus_markers {
         "+"
     } else {
         " "

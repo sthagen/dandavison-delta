@@ -9,7 +9,7 @@ test:
 	bash -c "diff -u <(git log -p) \
                      <(git log -p | delta --width variable \
                                           --tabs 0 \
-                                          --retain-plus-minus-markers \
+                                          --keep-plus-minus-markers \
                                           --commit-style plain \
                                           --file-style plain \
                                           --hunk-style plain \

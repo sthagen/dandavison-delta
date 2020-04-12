@@ -610,7 +610,7 @@ mod tests {
             minus_emph_color: None,
             plus_color: None,
             plus_emph_color: None,
-            retain_plus_minus_markers: false,
+            keep_plus_minus_markers: false,
             theme: None,
             highlight_removed: false,
             commit_style: cli::SectionStyle::Plain,
