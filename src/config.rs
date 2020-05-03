@@ -14,6 +14,7 @@ pub struct Config<'a> {
     pub theme: Option<&'a Theme>,
     pub theme_name: String,
     pub max_line_distance: f64,
+    pub max_line_distance_for_naively_paired_lines: f64,
     pub minus_style_modifier: StyleModifier,
     pub minus_emph_style_modifier: StyleModifier,
     pub plus_style_modifier: StyleModifier,
@@ -30,7 +31,7 @@ pub struct Config<'a> {
     pub syntax_set: &'a SyntaxSet,
     pub terminal_width: usize,
     pub true_color: bool,
-    pub width: Option<usize>,
+    pub background_color_extends_to_terminal_width: bool,
     pub tab_width: usize,
     pub no_style: Style,
     pub max_buffered_lines: usize,
@@ -43,7 +44,6 @@ pub fn get_config<'a>(
     theme_set: &'a ThemeSet,
     true_color: bool,
     terminal_width: usize,
-    width: Option<usize>,
     paging_mode: PagingMode,
 ) -> Config<'a> {
     // Implement --color-only
@@ -52,7 +52,7 @@ pub fn get_config<'a>(
     } else {
         opt.keep_plus_minus_markers
     };
-    let width = if opt.color_only { None } else { width };
+    let background_color_extends_to_terminal_width = opt.width != Some("variable".to_string());
     let tab_width = if opt.color_only { 0 } else { opt.tab_width };
     let commit_style = if opt.color_only {
         cli::SectionStyle::Plain
@@ -131,10 +131,16 @@ pub fn get_config<'a>(
     let minus_line_marker = if keep_plus_minus_markers { "-" } else { " " };
     let plus_line_marker = if keep_plus_minus_markers { "+" } else { " " };
 
+    let max_line_distance_for_naively_paired_lines =
+        env::get_env_var("DELTA_EXPERIMENTAL_MAX_LINE_DISTANCE_FOR_NAIVELY_PAIRED_LINES")
+            .map(|s| s.parse::<f64>().unwrap_or(0.0))
+            .unwrap_or(0.0);
+
     Config {
         theme,
         theme_name,
         max_line_distance: opt.max_line_distance,
+        max_line_distance_for_naively_paired_lines,
         minus_style_modifier,
         minus_emph_style_modifier,
         plus_style_modifier,
@@ -150,7 +156,7 @@ pub fn get_config<'a>(
         hunk_color: color_from_rgb_or_ansi_code(&opt.hunk_color),
         true_color,
         terminal_width,
-        width,
+        background_color_extends_to_terminal_width,
         tab_width,
         syntax_set,
         no_style: style::get_no_style(),
