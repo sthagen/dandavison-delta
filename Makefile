@@ -1,6 +1,9 @@
 build:
 	cargo build --release
 
+format:
+	rustfmt src/*.rs
+
 lint:
 	cargo clippy
 
@@ -25,11 +28,17 @@ hash:
 	printf "delta-$$version-x86_64-unknown-linux-musl.tar.gz %s\n" $$(curl -sL https://github.com/dandavison/delta/releases/download/$$version/delta-$$version-x86_64-unknown-linux-musl.tar.gz | sha256sum -)
 
 BENCHMARK_INPUT_FILE = /tmp/delta-benchmark-input.gitdiff
+BENCHMARK_COMMAND = git log -p 23c292d3f25c67082a2ba315a187268be1a9b0ab
 benchmark: build
-	git log -p 23c292d3f25c67082a2ba315a187268be1a9b0ab > $(BENCHMARK_INPUT_FILE)
+	$(BENCHMARK_COMMAND) > $(BENCHMARK_INPUT_FILE)
 	hyperfine 'target/release/delta < $(BENCHMARK_INPUT_FILE) > /dev/null'
+
+# https://github.com/brendangregg/FlameGraph
+flamegraph: build
+	$(BENCHMARK_COMMAND) | target/release/delta > /dev/null &
+	sample delta | stackcollapse-sample | flamegraph > performance/flamegraph.svg
 
 chronologer:
 	chronologer performance/chronologer.yaml
 
-.PHONY: build lint test unit-test end-to-end-test release version hash benchmark chronologer
+.PHONY: build format lint test unit-test end-to-end-test release version hash benchmark chronologer

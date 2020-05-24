@@ -3,7 +3,7 @@
 
 ## A syntax-highlighter for git and diff output
 
-Delta provides language syntax-highlighting, within-line insertion/deletion detection, and restructured diff output for git on the command line. All the syntax-highlighting color themes that are available with [bat](https://github.com/sharkdp/bat/) are available with delta. Here's what `git show` looks like when git is configured to use delta as its pager:
+Delta provides language syntax-highlighting, within-line insertion/deletion detection, and restructured diff output for git on the command line. Here's what `git show` looks like when git is configured to use delta as its pager:
 
 <br>
 
@@ -11,38 +11,64 @@ Delta provides language syntax-highlighting, within-line insertion/deletion dete
   <tr>
     <td>
       <img width=500px style="border: 1px solid black"
-           src="https://user-images.githubusercontent.com/52205/75841661-eca47d00-5d93-11ea-8d32-48f2ebb0c5cb.png"
+           src="https://user-images.githubusercontent.com/52205/81058545-a5725f80-8e9c-11ea-912e-d21954586a44.png"
            alt="image" />
     </td>
     <td>
       <img width=500px style="border: 1px solid black"
-           src="https://user-images.githubusercontent.com/52205/75842593-59207b80-5d96-11ea-843e-c7d2c5a55548.png"
+           src="https://user-images.githubusercontent.com/52205/81058911-6abcf700-8e9d-11ea-93be-e212824ec03d.png"
            alt="image" />
     </td>
   </tr>
   <tr>
     <td>
-      "GitHub" theme
+      "Dracula" theme
     </td>
     <td>
-      "Monokai Extended" theme
+      "GitHub" theme
     </td>
   </tr>
 </table>
 
 <br>
 <br>
-By default, delta restructures the git output slightly to make the hunk markers human-readable:
+
+**By default, delta restructures the git output slightly to make the hunk markers human-readable:**
 
 <br>
-<br>
-
 <table><tr><td>
-  <img width=650px src="https://user-images.githubusercontent.com/52205/74090846-f200f700-4a75-11ea-9427-89e1fa686bfe.png" alt="image" />
+  <img width=650px src="https://user-images.githubusercontent.com/52205/81059276-254cf980-8e9e-11ea-95c3-8b757a4c11b5.png" alt="image" />
 </td></tr></table>
 
 
+<br>
+<br>
 
+**All the syntax-highlighting color themes that are available with [bat](https://github.com/sharkdp/bat/) are available with delta:**
+
+<br>
+<table>
+  <tr>
+    <td>
+      <img width=500px style="border: 1px solid black"
+           src="https://user-images.githubusercontent.com/52205/80850197-b8f5a000-8be8-11ea-8c9e-29c5b213c4b7.png"
+           alt="image" />
+    </td>
+    <td>
+      <img width=450px style="border: 1px solid black"
+           src="https://user-images.githubusercontent.com/52205/80850237-e04c6d00-8be8-11ea-9027-0d2ea62f15c2.png"
+           alt="image" />
+    </td>
+  </tr>
+  <tr>
+    <td>
+      <code>delta --list-themes --dark</code>
+    </td>
+    <td>
+      <code>delta --list-themes --light</code>
+    </td>
+  </tr>
+</table>
 
 
 <br>
@@ -65,7 +91,7 @@ Alternatively, delta is available in the following package managers:
 
 <table>
   <tr>
-    <td>Arch Linux (AUR)</td>
+    <td>Arch Linux (<a href="https://aur.archlinux.org/packages/git-delta">AUR</a>)</td>
     <td><code>yay -S git-delta</code>
         <br>or<br>
         <code>git clone https://aur.archlinux.org/git-delta.git</code><br>
@@ -78,6 +104,10 @@ Alternatively, delta is available in the following package managers:
     <code>dpkg -i file.deb</code></td>
   </tr>
   <tr>
+    <td>Fedora</td>
+    <td><code>dnf install git-delta</code></td>
+  </tr>
+  <tr>
     <td>FreeBSD</td>
     <td><code>pkg install git-delta</code></td>
   </tr>
@@ -86,8 +116,16 @@ Alternatively, delta is available in the following package managers:
     <td><code>brew install git-delta</code></td>
   </tr>
   <tr>
+    <td>MacPorts</td>
+    <td><code>port install git-delta</code></td>
+  </tr>
+  <tr>
     <td>Nix</td>
     <td><code>nix-env -iA nixpkgs.gitAndTools.delta</code>
+  </tr>
+  <tr>
+    <td>Windows (<a href="https://chocolatey.org/packages/delta">Chocolatey</a>)</td>
+    <td><code>choco install delta</code></td>
   </tr>
 </table>
 
@@ -118,9 +156,13 @@ diff -u a.txt b.txt | delta
 ```
 
 ## Supported languages and themes
-To list the supported languages and color themes, use `delta --list-languages` and `delta --list-theme-names`. To see a demo of the color themes, use `delta --list-themes`.
+To list the supported languages and color themes, use `delta --list-languages` and `delta --list-theme-names`. To see a demo of the color themes, use `delta --list-themes`:
 
-delta uses the same mechanisms as [bat](https://github.com/sharkdp/bat#adding-new-syntaxes--language-definitions) for locally adding custom color themes and support for new languages: please see the [bat](https://github.com/sharkdp/bat#adding-new-syntaxes--language-definitions) documentation. You will need to install bat in order to run the `bat cache --build` command.
+To add your own custom color theme, or language, please follow the instructions in the Customization section of the [bat documentation](https://github.com/sharkdp/bat/#customization):
+- [Adding a custom language](https://github.com/sharkdp/bat/#adding-new-syntaxes--language-definitions)
+- [Adding a custom theme](https://github.com/sharkdp/bat/#adding-new-themes)
+
+Delta automatically recognizes custom themes and languages added to bat. You will need to install bat in order to run the `bat cache --build` command.
 
 The languages and color themes that ship with delta are those that ship with bat. So, to propose a new language or color theme for inclusion in delta, it would need to be a helpful addition to bat, in which case please open a PR against bat.
 
@@ -156,13 +198,9 @@ Delta can be used when displaying diffs in the Magit git client: see [magit-delt
 <table><tr><td><img width=500px src="https://user-images.githubusercontent.com/52205/79934267-2acb2e00-8420-11ea-8bc4-546508fd3581.png" alt="image" /></td></tr></table>
 
 
-## Using delta with mercurial
+## Mercurial
 
-Edit your `.hgrc` as follow and set the options you want for delta in it:
-```
-[pager]
-pager = delta --dark
-```
+Add delta to the `[pager]` section of `.hgrc`, the same way as `~/.gitconfig`.
 
 
 ## Options

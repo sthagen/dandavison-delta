@@ -6,15 +6,15 @@ use syntect::easy::HighlightLines;
 use syntect::highlighting::{Color, Style, StyleModifier};
 use syntect::parsing::{SyntaxReference, SyntaxSet};
 
-use crate::bat::assets::HighlightingAssets;
 use crate::bat::terminal::to_ansi_color;
 use crate::config;
+use crate::delta::State;
 use crate::edits;
 use crate::paint::superimpose_style_sections::superimpose_style_sections;
 use crate::style;
 
-const ANSI_CSI_ERASE_IN_LINE: &str = "\x1b[K";
-const ANSI_SGR_RESET: &str = "\x1b[0m";
+pub const ANSI_CSI_ERASE_IN_LINE: &str = "\x1b[K";
+pub const ANSI_SGR_RESET: &str = "\x1b[0m";
 
 pub struct Painter<'a> {
     pub minus_lines: Vec<String>,
@@ -27,14 +27,10 @@ pub struct Painter<'a> {
 }
 
 impl<'a> Painter<'a> {
-    pub fn new(
-        writer: &'a mut dyn Write,
-        config: &'a config::Config,
-        assets: &'a HighlightingAssets,
-    ) -> Self {
-        let default_syntax = Self::get_syntax(config.syntax_set, None);
-        let dummy_theme = &assets.theme_set.themes[style::DEFAULT_LIGHT_THEME];
-        let dummy_highlighter = HighlightLines::new(default_syntax, dummy_theme);
+    pub fn new(writer: &'a mut dyn Write, config: &'a config::Config) -> Self {
+        let default_syntax = Self::get_syntax(&config.syntax_set, None);
+        // TODO: Avoid doing this.
+        let dummy_highlighter = HighlightLines::new(default_syntax, &config.dummy_theme);
         Self {
             minus_lines: Vec::new(),
             plus_lines: Vec::new(),
@@ -47,7 +43,7 @@ impl<'a> Painter<'a> {
     }
 
     pub fn set_syntax(&mut self, extension: Option<&str>) {
-        self.syntax = Painter::get_syntax(self.config.syntax_set, extension);
+        self.syntax = Painter::get_syntax(&self.config.syntax_set, extension);
     }
 
     fn get_syntax(syntax_set: &'a SyntaxSet, extension: Option<&str>) -> &'a SyntaxReference {
@@ -57,19 +53,24 @@ impl<'a> Painter<'a> {
     }
 
     pub fn set_highlighter(&mut self) {
-        if let Some(theme) = self.config.theme {
-            self.highlighter = HighlightLines::new(self.syntax, theme)
+        if let Some(ref theme) = self.config.theme {
+            self.highlighter = HighlightLines::new(self.syntax, &theme)
         };
     }
 
     pub fn paint_buffered_lines(&mut self) {
-        let (minus_line_syntax_style_sections, plus_line_syntax_style_sections) =
-            Self::get_syntax_style_sections(
-                &self.minus_lines,
-                &self.plus_lines,
-                &mut self.highlighter,
-                self.config,
-            );
+        let minus_line_syntax_style_sections = Self::get_syntax_style_sections_for_lines(
+            &self.minus_lines,
+            self.config.should_syntax_highlight(&State::HunkMinus),
+            &mut self.highlighter,
+            self.config,
+        );
+        let plus_line_syntax_style_sections = Self::get_syntax_style_sections_for_lines(
+            &self.plus_lines,
+            self.config.should_syntax_highlight(&State::HunkPlus),
+            &mut self.highlighter,
+            self.config,
+        );
         let (minus_line_diff_style_sections, plus_line_diff_style_sections) =
             Self::get_diff_style_sections(&self.minus_lines, &self.plus_lines, self.config);
         // TODO: lines and style sections contain identical line text
@@ -161,39 +162,29 @@ impl<'a> Painter<'a> {
         Ok(())
     }
 
-    /// Perform syntax highlighting for minus and plus lines in buffer.
-    fn get_syntax_style_sections<'m, 'p>(
-        minus_lines: &'m [String],
-        plus_lines: &'p [String],
+    fn get_syntax_style_sections_for_lines<'s>(
+        lines: &'s [String],
+        should_syntax_highlight: bool,
         highlighter: &mut HighlightLines,
         config: &config::Config,
-    ) -> (Vec<Vec<(Style, &'m str)>>, Vec<Vec<(Style, &'p str)>>) {
-        let mut minus_line_sections = Vec::new();
-        for line in minus_lines.iter() {
-            minus_line_sections.push(Painter::get_line_syntax_style_sections(
-                &line,
+    ) -> Vec<Vec<(Style, &'s str)>> {
+        let mut line_sections = Vec::new();
+        for line in lines.iter() {
+            line_sections.push(Painter::get_line_syntax_style_sections(
+                line,
+                should_syntax_highlight,
                 highlighter,
                 &config,
-                config.highlight_removed,
             ));
         }
-        let mut plus_line_sections = Vec::new();
-        for line in plus_lines.iter() {
-            plus_line_sections.push(Painter::get_line_syntax_style_sections(
-                &line,
-                highlighter,
-                &config,
-                true,
-            ));
-        }
-        (minus_line_sections, plus_line_sections)
+        line_sections
     }
 
     pub fn get_line_syntax_style_sections(
         line: &'a str,
+        should_syntax_highlight: bool,
         highlighter: &mut HighlightLines,
         config: &config::Config,
-        should_syntax_highlight: bool,
     ) -> Vec<(Style, &'a str)> {
         if should_syntax_highlight && config.theme.is_some() {
             highlighter.highlight(line, &config.syntax_set)
@@ -247,6 +238,12 @@ pub fn paint_text(text: &str, style: Style, output_buffer: &mut String, true_col
 /// Return text together with shell escape codes specifying the foreground color.
 pub fn paint_text_foreground(text: &str, color: Color, true_color: bool) -> String {
     to_ansi_color(color, true_color).paint(text).to_string()
+}
+
+#[allow(dead_code)]
+pub fn paint_text_background(text: &str, color: Color, true_color: bool) -> String {
+    let style = ansi_term::Style::new().on(to_ansi_color(color, true_color));
+    style.paint(text).to_string()
 }
 
 // See
