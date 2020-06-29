@@ -1,6 +1,6 @@
 use regex::Regex;
 
-use lazy_static::lazy_static;
+use unicode_segmentation::UnicodeSegmentation;
 use unicode_width::UnicodeWidthStr;
 
 use crate::align;
@@ -16,6 +16,7 @@ pub fn infer_edits<'a, EditOperation>(
     deletion: EditOperation,
     noop_insertion: EditOperation,
     insertion: EditOperation,
+    tokenization_regex: &Regex,
     max_line_distance: f64,
     max_line_distance_for_naively_paired_lines: f64,
 ) -> (
@@ -34,7 +35,10 @@ where
     'minus_lines_loop: for minus_line in minus_lines {
         let mut considered = 0; // plus lines considered so far as match for minus_line
         for plus_line in &plus_lines[emitted..] {
-            let alignment = align::Alignment::new(tokenize(minus_line), tokenize(plus_line));
+            let alignment = align::Alignment::new(
+                tokenize(minus_line, tokenization_regex),
+                tokenize(plus_line, tokenization_regex),
+            );
             let (annotated_minus_line, annotated_plus_line, distance) = annotate(
                 alignment,
                 noop_deletion,
@@ -76,33 +80,39 @@ where
     (annotated_minus_lines, annotated_plus_lines)
 }
 
-lazy_static! {
-    static ref TOKENIZATION_REGEXP: Regex = Regex::new(r#"[\t ,;.:()\[\]<>/'"-]+"#).unwrap();
-}
-
 /// Split line into tokens for alignment. The alignment algorithm aligns sequences of substrings;
 /// not individual characters.
-fn tokenize(line: &str) -> Vec<&str> {
+fn tokenize<'a>(line: &'a str, regex: &Regex) -> Vec<&'a str> {
     let mut tokens = Vec::new();
     let mut offset = 0;
-    for m in TOKENIZATION_REGEXP.find_iter(line) {
-        tokens.push(&line[offset..m.start()]);
-        // Align separating text as multiple single-character tokens.
-        for i in m.start()..m.end() {
-            tokens.push(&line[i..i + 1]);
+    for m in regex.find_iter(line) {
+        if offset == 0 && m.start() > 0 {
+            tokens.push("");
         }
+        // Align separating text as multiple single-character tokens.
+        for t in line[offset..m.start()].graphemes(true) {
+            tokens.push(t);
+        }
+        tokens.push(&line[m.start()..m.end()]);
         offset = m.end();
     }
     if offset < line.len() {
-        tokens.push(&line[offset..line.len()]);
+        if offset == 0 {
+            tokens.push("");
+        }
+        for t in line[offset..line.len()].graphemes(true) {
+            tokens.push(t);
+        }
     }
     tokens
 }
 
 /// Use alignment to "annotate" minus and plus lines. An "annotated" line is a sequence of
-/// (s: &str, a: Annotation) pairs, where the &strs reference the memory
+/// (a: Annotation, s: &str) pairs, where the &strs reference the memory
 /// of the original line and their concatenation equals the line.
-// TODO: Coalesce runs of the same operation.
+// This function doesn't return "coalesced" annotations: i.e. they're often are runs of consecutive
+// occurrences of the same operation. Since it is returning &strs pointing into the memory of the
+// original line, it's not possible to coalesce them in this function.
 fn annotate<'a, Annotation>(
     alignment: align::Alignment<'a>,
     noop_deletion: Annotation,
@@ -114,6 +124,7 @@ fn annotate<'a, Annotation>(
 ) -> (Vec<(Annotation, &'a str)>, Vec<(Annotation, &'a str)>, f64)
 where
     Annotation: Copy,
+    Annotation: PartialEq,
 {
     let mut annotated_minus_line = Vec::new();
     let mut annotated_plus_line = Vec::new();
@@ -178,8 +189,11 @@ where
                 let n_d = distance_contribution(minus_section);
                 d_denom += n_d;
                 let is_space = minus_section.trim().is_empty();
+                let coalesce_space_with_previous = is_space
+                    && ((minus_op_prev == deletion && plus_op_prev == insertion)
+                        || (minus_op_prev == noop_deletion && plus_op_prev == noop_insertion));
                 annotated_minus_line.push((
-                    if is_space {
+                    if coalesce_space_with_previous {
                         minus_op_prev
                     } else {
                         noop_deletion
@@ -187,7 +201,7 @@ where
                     minus_section,
                 ));
                 annotated_plus_line.push((
-                    if is_space {
+                    if coalesce_space_with_previous {
                         plus_op_prev
                     } else {
                         noop_insertion
@@ -217,14 +231,31 @@ where
             }
         }
     }
-    let distance = (d_numer as f64) / (d_denom as f64);
-    (annotated_minus_line, annotated_plus_line, distance)
+    (
+        annotated_minus_line,
+        annotated_plus_line,
+        compute_distance(d_numer as f64, d_denom as f64),
+    )
+}
+
+fn compute_distance(d_numer: f64, d_denom: f64) -> f64 {
+    if d_denom > 0.0 {
+        d_numer / d_denom
+    } else {
+        0.0
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use itertools::Itertools;
+    use lazy_static::lazy_static;
     use unicode_segmentation::UnicodeSegmentation;
+
+    lazy_static! {
+        static ref DEFAULT_TOKENIZATION_REGEXP: Regex = Regex::new(r#"\w+"#).unwrap();
+    }
 
     #[derive(Clone, Copy, Debug, PartialEq)]
     enum EditOperation {
@@ -242,15 +273,26 @@ mod tests {
     use EditOperation::*;
 
     #[test]
+    fn test_tokenize_0() {
+        assert_tokenize("", &[]);
+        assert_tokenize(";", &["", ";"]);
+        assert_tokenize(";;", &["", ";", ";"]);
+        assert_tokenize(";;a", &["", ";", ";", "a"]);
+        assert_tokenize(";;ab", &["", ";", ";", "ab"]);
+        assert_tokenize(";;ab;", &["", ";", ";", "ab", ";"]);
+        assert_tokenize(";;ab;;", &["", ";", ";", "ab", ";", ";"]);
+    }
+
+    #[test]
     fn test_tokenize_1() {
-        assert_eq!(tokenize("aaa bbb"), vec!["aaa", " ", "bbb"])
+        assert_tokenize("aaa bbb", &["aaa", " ", "bbb"])
     }
 
     #[test]
     fn test_tokenize_2() {
-        assert_eq!(
-            tokenize("fn coalesce_edits<'a, EditOperation>("),
-            vec![
+        assert_tokenize(
+            "fn coalesce_edits<'a, EditOperation>(",
+            &[
                 "fn",
                 " ",
                 "coalesce_edits",
@@ -261,16 +303,16 @@ mod tests {
                 " ",
                 "EditOperation",
                 ">",
-                "("
-            ]
+                "(",
+            ],
         );
     }
 
     #[test]
     fn test_tokenize_3() {
-        assert_eq!(
-            tokenize("fn coalesce_edits<'a, 'b, EditOperation>("),
-            vec![
+        assert_tokenize(
+            "fn coalesce_edits<'a, 'b, EditOperation>(",
+            &[
                 "fn",
                 " ",
                 "coalesce_edits",
@@ -285,21 +327,22 @@ mod tests {
                 " ",
                 "EditOperation",
                 ">",
-                "("
-            ]
+                "(",
+            ],
         );
     }
 
     #[test]
     fn test_tokenize_4() {
-        assert_eq!(
-            tokenize("annotated_plus_lines.push(vec![(noop_insertion, plus_line)]);"),
-            vec![
+        assert_tokenize(
+            "annotated_plus_lines.push(vec![(noop_insertion, plus_line)]);",
+            &[
                 "annotated_plus_lines",
                 ".",
                 "push",
                 "(",
-                "vec!",
+                "vec",
+                "!",
                 "[",
                 "(",
                 "noop_insertion",
@@ -309,9 +352,109 @@ mod tests {
                 ")",
                 "]",
                 ")",
-                ";"
-            ]
+                ";",
+            ],
         );
+    }
+
+    #[test]
+    fn test_tokenize_5() {
+        assert_tokenize(
+            "         let col = Color::from_str(s).unwrap_or_else(|_| die());",
+            &[
+                "",
+                " ",
+                " ",
+                " ",
+                " ",
+                " ",
+                " ",
+                " ",
+                " ",
+                " ",
+                "let",
+                " ",
+                "col",
+                " ",
+                "=",
+                " ",
+                "Color",
+                ":",
+                ":",
+                "from_str",
+                "(",
+                "s",
+                ")",
+                ".",
+                "unwrap_or_else",
+                "(",
+                "|",
+                "_",
+                "|",
+                " ",
+                "die",
+                "(",
+                ")",
+                ")",
+                ";",
+            ],
+        )
+    }
+
+    #[test]
+    fn test_tokenize_6() {
+        assert_tokenize(
+            "         (minus_file, plus_file) => format!(\"renamed: {} ⟶  {}\", minus_file, plus_file),",
+            &["",
+              " ",
+              " ",
+              " ",
+              " ",
+              " ",
+              " ",
+              " ",
+              " ",
+              " ",
+              "(",
+              "minus_file",
+              ",",
+              " ",
+              "plus_file",
+              ")",
+              " ",
+              "=",
+              ">",
+              " ",
+              "format",
+              "!",
+              "(",
+              "\"",
+              "renamed",
+              ":",
+              " ",
+              "{",
+              "}",
+              " ",
+              "⟶",
+              " ",
+              " ",
+              "{",
+              "}",
+              "\"",
+              ",",
+              " ",
+              "minus_file",
+              ",",
+              " ",
+              "plus_file",
+              ")",
+              ","])
+    }
+
+    fn assert_tokenize(text: &str, expected_tokens: &[&str]) {
+        let actual_tokens = tokenize(text, &*DEFAULT_TOKENIZATION_REGEXP);
+        assert_eq!(text, expected_tokens.iter().join(""));
+        assert_eq!(actual_tokens, expected_tokens);
     }
 
     #[test]
@@ -433,23 +576,7 @@ mod tests {
                 "             s0.zip(s1)",
                 "                 .take_while(|((_, c0), (_, c1))| c0 == c1) // TODO: Don't consume one-past-the-end!",
                 "                 .fold(0, |offset, ((_, c0), (_, _))| offset + c0.len())"
-            ], 0.66)
-    }
-
-    #[test]
-    fn test_infer_edits_6_1() {
-        let (after, before) = (
-            "                     i += c0.len();",
-            "                 .fold(0, |offset, ((_, c0), (_, _))| offset + c0.len())",
-        );
-        println!("          before: {}", before);
-        println!("          after : {}", after);
-        println!("tokenized before: {:?}", tokenize(before));
-        println!("tokenized after : {:?}", tokenize(after));
-        println!(
-            "distance: {:?}",
-            align::Alignment::new(tokenize(before), tokenize(after)).distance_parts()
-        );
+            ], 0.5)
     }
 
     #[test]
@@ -604,9 +731,11 @@ mod tests {
             Deletion,
             PlusNoop,
             Insertion,
+            &*DEFAULT_TOKENIZATION_REGEXP,
             max_line_distance,
             0.0,
         );
+        // compare_annotated_lines(actual_edits, expected_edits);
         assert_eq!(actual_edits, expected_edits);
     }
 

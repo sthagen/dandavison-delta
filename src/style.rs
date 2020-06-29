@@ -1,185 +1,135 @@
-use syntect::highlighting::{Color, FontStyle, Style, StyleModifier};
+use std::borrow::Cow;
+use std::fmt;
 
-pub const LIGHT_THEMES: [&str; 5] = [
-    "GitHub",
-    "Monokai Extended Light",
-    "OneHalfLight",
-    "ansi-light",
-    "Solarized (light)",
-];
+use ansi_term;
 
-pub const DEFAULT_LIGHT_THEME: &str = "GitHub";
-pub const DEFAULT_DARK_THEME: &str = "Monokai Extended";
+use crate::color;
 
-pub fn is_light_theme(theme: &str) -> bool {
-    LIGHT_THEMES.contains(&theme)
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub struct Style {
+    pub ansi_term_style: ansi_term::Style,
+    pub is_emph: bool,
+    pub is_omitted: bool,
+    pub is_raw: bool,
+    pub is_syntax_highlighted: bool,
+    pub decoration_style: DecorationStyle,
 }
 
-pub fn is_no_syntax_highlighting_theme_name(theme_name: &str) -> bool {
-    theme_name.to_lowercase() == "none"
+#[derive(Clone, Copy, Debug, PartialEq)]
+pub enum DecorationStyle {
+    Box(ansi_term::Style),
+    Underline(ansi_term::Style),
+    Overline(ansi_term::Style),
+    UnderOverline(ansi_term::Style),
+    BoxWithUnderline(ansi_term::Style),
+    BoxWithOverline(ansi_term::Style),
+    BoxWithUnderOverline(ansi_term::Style),
+    NoDecoration,
 }
 
-pub fn get_minus_color_default(is_light_mode: bool, is_true_color: bool) -> Color {
-    match (is_light_mode, is_true_color) {
-        (true, true) => LIGHT_THEME_MINUS_COLOR,
-        (true, false) => LIGHT_THEME_MINUS_COLOR_256,
-        (false, true) => DARK_THEME_MINUS_COLOR,
-        (false, false) => DARK_THEME_MINUS_COLOR_256,
+impl Style {
+    pub fn new() -> Self {
+        Self {
+            ansi_term_style: ansi_term::Style::new(),
+            is_emph: false,
+            is_omitted: false,
+            is_raw: false,
+            is_syntax_highlighted: false,
+            decoration_style: DecorationStyle::NoDecoration,
+        }
+    }
+
+    pub fn from_colors(
+        foreground: Option<ansi_term::Color>,
+        background: Option<ansi_term::Color>,
+    ) -> Self {
+        Self {
+            ansi_term_style: ansi_term::Style {
+                foreground,
+                background,
+                ..ansi_term::Style::new()
+            },
+            ..Self::new()
+        }
+    }
+
+    pub fn paint<'a, I, S: 'a + ToOwned + ?Sized>(
+        self,
+        input: I,
+    ) -> ansi_term::ANSIGenericString<'a, S>
+    where
+        I: Into<Cow<'a, S>>,
+        <S as ToOwned>::Owned: fmt::Debug,
+    {
+        self.ansi_term_style.paint(input)
+    }
+
+    pub fn has_background_color(&self) -> bool {
+        if self.ansi_term_style.is_reverse {
+            self.ansi_term_style.foreground.is_some()
+        } else {
+            self.ansi_term_style.background.is_some()
+        }
+    }
+
+    pub fn decoration_ansi_term_style(&self) -> Option<ansi_term::Style> {
+        match self.decoration_style {
+            DecorationStyle::Box(style) => Some(style),
+            DecorationStyle::Underline(style) => Some(style),
+            DecorationStyle::Overline(style) => Some(style),
+            DecorationStyle::UnderOverline(style) => Some(style),
+            DecorationStyle::BoxWithUnderline(style) => Some(style),
+            DecorationStyle::BoxWithOverline(style) => Some(style),
+            DecorationStyle::BoxWithUnderOverline(style) => Some(style),
+            DecorationStyle::NoDecoration => None,
+        }
+    }
+
+    pub fn to_painted_string(&self) -> ansi_term::ANSIGenericString<str> {
+        self.paint(self.to_string())
+    }
+
+    fn to_string(&self) -> String {
+        if self.is_raw {
+            return "raw".to_string();
+        }
+        let mut words = Vec::<String>::new();
+        if self.is_omitted {
+            words.push("omit".to_string());
+        }
+        if self.ansi_term_style.is_blink {
+            words.push("blink".to_string());
+        }
+        if self.ansi_term_style.is_bold {
+            words.push("bold".to_string());
+        }
+        if self.ansi_term_style.is_dimmed {
+            words.push("dim".to_string());
+        }
+        if self.ansi_term_style.is_italic {
+            words.push("italic".to_string());
+        }
+        if self.ansi_term_style.is_reverse {
+            words.push("reverse".to_string());
+        }
+        if self.ansi_term_style.is_strikethrough {
+            words.push("strike".to_string());
+        }
+        if self.ansi_term_style.is_underline {
+            words.push("ul".to_string());
+        }
+
+        match (self.is_syntax_highlighted, self.ansi_term_style.foreground) {
+            (true, _) => words.push("syntax".to_string()),
+            (false, Some(color)) => {
+                words.push(color::color_to_string(color));
+            }
+            (false, None) => words.push("normal".to_string()),
+        }
+        match self.ansi_term_style.background {
+            Some(color) => words.push(color::color_to_string(color)),
+            None => {}
+        }
+        words.join(" ")
     }
 }
-
-pub fn get_minus_emph_color_default(is_light_mode: bool, is_true_color: bool) -> Color {
-    match (is_light_mode, is_true_color) {
-        (true, true) => LIGHT_THEME_MINUS_EMPH_COLOR,
-        (true, false) => LIGHT_THEME_MINUS_EMPH_COLOR_256,
-        (false, true) => DARK_THEME_MINUS_EMPH_COLOR,
-        (false, false) => DARK_THEME_MINUS_EMPH_COLOR_256,
-    }
-}
-
-pub fn get_plus_color_default(is_light_mode: bool, is_true_color: bool) -> Color {
-    match (is_light_mode, is_true_color) {
-        (true, true) => LIGHT_THEME_PLUS_COLOR,
-        (true, false) => LIGHT_THEME_PLUS_COLOR_256,
-        (false, true) => DARK_THEME_PLUS_COLOR,
-        (false, false) => DARK_THEME_PLUS_COLOR_256,
-    }
-}
-
-pub fn get_plus_emph_color_default(is_light_mode: bool, is_true_color: bool) -> Color {
-    match (is_light_mode, is_true_color) {
-        (true, true) => LIGHT_THEME_PLUS_EMPH_COLOR,
-        (true, false) => LIGHT_THEME_PLUS_EMPH_COLOR_256,
-        (false, true) => DARK_THEME_PLUS_EMPH_COLOR,
-        (false, false) => DARK_THEME_PLUS_EMPH_COLOR_256,
-    }
-}
-
-const LIGHT_THEME_MINUS_COLOR: Color = Color {
-    r: 0xff,
-    g: 0xe0,
-    b: 0xe0,
-    a: 0xff,
-};
-
-const LIGHT_THEME_MINUS_COLOR_256: Color = Color {
-    r: 224,
-    g: 0x00,
-    b: 0x00,
-    a: 0x00,
-};
-
-const LIGHT_THEME_MINUS_EMPH_COLOR: Color = Color {
-    r: 0xff,
-    g: 0xc0,
-    b: 0xc0,
-    a: 0xff,
-};
-
-const LIGHT_THEME_MINUS_EMPH_COLOR_256: Color = Color {
-    r: 217,
-    g: 0x00,
-    b: 0x00,
-    a: 0x00,
-};
-
-const LIGHT_THEME_PLUS_COLOR: Color = Color {
-    r: 0xd0,
-    g: 0xff,
-    b: 0xd0,
-    a: 0xff,
-};
-
-const LIGHT_THEME_PLUS_COLOR_256: Color = Color {
-    r: 194,
-    g: 0x00,
-    b: 0x00,
-    a: 0x00,
-};
-
-const LIGHT_THEME_PLUS_EMPH_COLOR: Color = Color {
-    r: 0xa0,
-    g: 0xef,
-    b: 0xa0,
-    a: 0xff,
-};
-
-const LIGHT_THEME_PLUS_EMPH_COLOR_256: Color = Color {
-    r: 157,
-    g: 0x00,
-    b: 0x00,
-    a: 0x00,
-};
-
-const DARK_THEME_MINUS_COLOR: Color = Color {
-    r: 0x3f,
-    g: 0x00,
-    b: 0x01,
-    a: 0xff,
-};
-
-const DARK_THEME_MINUS_COLOR_256: Color = Color {
-    r: 52,
-    g: 0x00,
-    b: 0x00,
-    a: 0x00,
-};
-
-const DARK_THEME_MINUS_EMPH_COLOR: Color = Color {
-    r: 0x90,
-    g: 0x10,
-    b: 0x11,
-    a: 0xff,
-};
-
-const DARK_THEME_MINUS_EMPH_COLOR_256: Color = Color {
-    r: 124,
-    g: 0x00,
-    b: 0x00,
-    a: 0x00,
-};
-
-const DARK_THEME_PLUS_COLOR: Color = Color {
-    r: 0x00,
-    g: 0x28,
-    b: 0x00,
-    a: 0xff,
-};
-
-const DARK_THEME_PLUS_COLOR_256: Color = Color {
-    r: 22,
-    g: 0x00,
-    b: 0x00,
-    a: 0x00,
-};
-
-const DARK_THEME_PLUS_EMPH_COLOR: Color = Color {
-    r: 0x00,
-    g: 0x60,
-    b: 0x00,
-    a: 0xff,
-};
-
-const DARK_THEME_PLUS_EMPH_COLOR_256: Color = Color {
-    r: 28,
-    g: 0x00,
-    b: 0x00,
-    a: 0x00,
-};
-
-/// A special color to specify that no color escape codes should be emitted.
-pub const NO_COLOR: Color = Color::BLACK;
-
-pub fn get_no_style() -> Style {
-    Style {
-        foreground: NO_COLOR,
-        background: NO_COLOR,
-        font_style: FontStyle::empty(),
-    }
-}
-
-pub const NO_BACKGROUND_COLOR_STYLE_MODIFIER: StyleModifier = StyleModifier {
-    foreground: None,
-    background: Some(NO_COLOR),
-    font_style: None,
-};

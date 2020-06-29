@@ -9,7 +9,7 @@ homepage = "https://github.com/dandavison/delta"
 license = "MIT"
 readme = "README.md"
 repository = "https://github.com/dandavison/delta"
-version = "0.1.1"
+version = "0.2.0"
 
 [[bin]]
 name = "delta"
@@ -17,24 +17,28 @@ path = "src/main.rs"
 
 [dependencies]
 ansi_colours = "1.0.1"
-ansi-parser = "0.6.5"
 ansi_term = "0.12.1"
 atty = "0.2.14"
-bit-set = "0.5.2"
+bitflags = "1.2.1"
 box_drawing = "0.1.2"
 bytelines = "2.2.2"
-console = "0.11.2"
-dirs = "2.0"
+console = "0.11.3"
+dirs = "3.0"
 itertools = "0.9.0"
 lazy_static = "1.4"
-regex = "1.2.1"
+regex = "1.3.9"
 shell-words = "1.0.0"
-structopt = "0.3.14"
+structopt = "0.3.15"
 unicode-segmentation = "1.6.0"
 unicode-width = "0.1.7"
 
+[dependencies.git2]
+version = "0.13.6"
+default-features = false
+features = []
+
 [dependencies.syntect]
-version = "4.1.1"
+version = "4.2.0"
 default-features = false
 features = ["parsing", "assets", "yaml-load", "dump-load", "regex-onig"]
 

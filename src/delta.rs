@@ -1,22 +1,21 @@
+use std::io::BufRead;
 use std::io::Write;
 
 use bytelines::ByteLines;
 use console::strip_ansi_codes;
-use std::io::BufRead;
 use unicode_segmentation::UnicodeSegmentation;
 
-use crate::cli;
 use crate::config::Config;
 use crate::draw;
-use crate::paint::{self, Painter};
+use crate::paint::Painter;
 use crate::parse;
-use crate::style;
+use crate::style::DecorationStyle;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum State {
     CommitMeta, // In commit metadata section
     FileMeta,   // In diff metadata section, between (possible) commit metadata and first hunk
-    HunkMeta,   // In hunk metadata line
+    HunkHeader, // In hunk metadata line
     HunkZero,   // In hunk; unchanged line
     HunkMinus,  // In hunk; removed line
     HunkPlus,   // In hunk; added line
@@ -33,7 +32,7 @@ pub enum Source {
 impl State {
     fn is_in_hunk(&self) -> bool {
         match *self {
-            State::HunkMeta | State::HunkZero | State::HunkMinus | State::HunkPlus => true,
+            State::HunkHeader | State::HunkZero | State::HunkMinus | State::HunkPlus => true,
             _ => false,
         }
     }
@@ -42,11 +41,11 @@ impl State {
 // Possible transitions, with actions on entry:
 //
 //
-// | from \ to   | CommitMeta  | FileMeta    | HunkMeta    | HunkZero    | HunkMinus   | HunkPlus |
+// | from \ to   | CommitMeta  | FileMeta    | HunkHeader  | HunkZero    | HunkMinus   | HunkPlus |
 // |-------------+-------------+-------------+-------------+-------------+-------------+----------|
 // | CommitMeta  | emit        | emit        |             |             |             |          |
 // | FileMeta    |             | emit        | emit        |             |             |          |
-// | HunkMeta    |             |             |             | emit        | push        | push     |
+// | HunkHeader  |             |             |             | emit        | push        | push     |
 // | HunkZero    | emit        | emit        | emit        | emit        | push        | push     |
 // | HunkMinus   | flush, emit | flush, emit | flush, emit | flush, emit | push        | push     |
 // | HunkPlus    | flush, emit | flush, emit | flush, emit | flush, emit | flush, push | push     |
@@ -74,51 +73,49 @@ where
         if line.starts_with("commit ") {
             painter.paint_buffered_lines();
             state = State::CommitMeta;
-            if config.commit_style != cli::SectionStyle::Plain {
+            if should_handle(&state, config) {
                 painter.emit()?;
-                handle_commit_meta_header_line(&mut painter, &raw_line, config)?;
+                handle_commit_meta_header_line(&mut painter, &line, &raw_line, config)?;
                 continue;
             }
         } else if line.starts_with("diff ") {
             painter.paint_buffered_lines();
             state = State::FileMeta;
         } else if (state == State::FileMeta || source == Source::DiffUnified)
-            // FIXME: For unified diff input, removal ("-") of a line starting with "--" (e.g. a
-            // Haskell or SQL comment) will be confused with the "---" file metadata marker.
             && (line.starts_with("--- ") || line.starts_with("rename from "))
-            && config.file_style != cli::SectionStyle::Plain
         {
             minus_file = parse::get_file_path_from_file_meta_line(&line, source == Source::GitDiff);
             if source == Source::DiffUnified {
                 state = State::FileMeta;
                 painter.set_syntax(parse::get_file_extension_from_marker_line(&line));
             } else {
-                state = State::FileMeta;
                 painter.set_syntax(parse::get_file_extension_from_file_meta_line_file_path(
                     &minus_file,
                 ));
             }
-        } else if (line.starts_with("+++ ") || line.starts_with("rename to "))
-            && config.file_style != cli::SectionStyle::Plain
+        } else if (state == State::FileMeta || source == Source::DiffUnified)
+            && (line.starts_with("+++ ") || line.starts_with("rename to "))
         {
             plus_file = parse::get_file_path_from_file_meta_line(&line, source == Source::GitDiff);
             painter.set_syntax(parse::get_file_extension_from_file_meta_line_file_path(
                 &plus_file,
             ));
-            painter.emit()?;
-            handle_file_meta_header_line(
-                &mut painter,
-                &minus_file,
-                &plus_file,
-                config,
-                source == Source::DiffUnified,
-            )?;
-        } else if line.starts_with("@@") {
-            state = State::HunkMeta;
-            painter.set_highlighter();
-            if config.hunk_style != cli::SectionStyle::Plain {
+            if should_handle(&State::FileMeta, config) {
                 painter.emit()?;
-                handle_hunk_meta_line(&mut painter, &line, config)?;
+                handle_file_meta_header_line(
+                    &mut painter,
+                    &minus_file,
+                    &plus_file,
+                    config,
+                    source == Source::DiffUnified,
+                )?;
+            }
+        } else if line.starts_with("@@") {
+            state = State::HunkHeader;
+            painter.set_highlighter();
+            if should_handle(&state, config) {
+                painter.emit()?;
+                handle_hunk_header_line(&mut painter, &line, &raw_line, config)?;
                 continue;
             }
         } else if source == Source::DiffUnified && line.starts_with("Only in ")
@@ -140,9 +137,9 @@ where
 
             state = State::FileMeta;
             painter.paint_buffered_lines();
-            if config.file_style != cli::SectionStyle::Plain {
+            if should_handle(&State::FileMeta, config) {
                 painter.emit()?;
-                handle_generic_file_meta_header_line(&mut painter, &raw_line, config)?;
+                handle_generic_file_meta_header_line(&mut painter, &line, &raw_line, config)?;
                 continue;
             }
         } else if state.is_in_hunk() {
@@ -153,7 +150,7 @@ where
             continue;
         }
 
-        if state == State::FileMeta && config.file_style != cli::SectionStyle::Plain {
+        if state == State::FileMeta && should_handle(&State::FileMeta, config) {
             // The file metadata section is 4 lines. Skip them under non-plain file-styles.
             continue;
         } else {
@@ -165,6 +162,12 @@ where
     painter.paint_buffered_lines();
     painter.emit()?;
     Ok(())
+}
+
+/// Should a handle_* function be called on this element?
+fn should_handle(state: &State, config: &Config) -> bool {
+    let style = config.get_style(state);
+    !(style.is_raw && style.decoration_style == DecorationStyle::NoDecoration)
 }
 
 /// Try to detect what is producing the input for delta.
@@ -188,21 +191,59 @@ fn detect_source(line: &str) -> Source {
 fn handle_commit_meta_header_line(
     painter: &mut Painter,
     line: &str,
+    raw_line: &str,
     config: &Config,
 ) -> std::io::Result<()> {
-    let draw_fn = match config.commit_style {
-        cli::SectionStyle::Box => draw::write_boxed_with_line,
-        cli::SectionStyle::Underline => draw::write_underlined,
-        cli::SectionStyle::Plain => panic!(),
-        cli::SectionStyle::Omit => return Ok(()),
+    if config.commit_style.is_omitted {
+        return Ok(());
+    }
+    let decoration_ansi_term_style;
+    let mut pad = false;
+    let draw_fn = match config.commit_style.decoration_style {
+        DecorationStyle::Box(style) => {
+            pad = true;
+            decoration_ansi_term_style = style;
+            draw::write_boxed
+        }
+        DecorationStyle::BoxWithUnderline(style) => {
+            pad = true;
+            decoration_ansi_term_style = style;
+            draw::write_boxed_with_underline
+        }
+        DecorationStyle::BoxWithOverline(style) => {
+            pad = true;
+            decoration_ansi_term_style = style;
+            draw::write_boxed // TODO: not implemented
+        }
+        DecorationStyle::BoxWithUnderOverline(style) => {
+            pad = true;
+            decoration_ansi_term_style = style;
+            draw::write_boxed // TODO: not implemented
+        }
+        DecorationStyle::Underline(style) => {
+            decoration_ansi_term_style = style;
+            draw::write_underlined
+        }
+        DecorationStyle::Overline(style) => {
+            decoration_ansi_term_style = style;
+            draw::write_overlined
+        }
+        DecorationStyle::UnderOverline(style) => {
+            decoration_ansi_term_style = style;
+            draw::write_underoverlined
+        }
+        DecorationStyle::NoDecoration => {
+            decoration_ansi_term_style = ansi_term::Style::new();
+            draw::write_no_decoration
+        }
     };
     draw_fn(
         painter.writer,
-        line,
-        config.terminal_width,
-        config.commit_color,
-        true,
-        config.true_color,
+        &format!("{}{}", line, if pad { " " } else { "" }),
+        &format!("{}{}", raw_line, if pad { " " } else { "" }),
+        &config.decorations_width,
+        config.commit_style,
+        decoration_ansi_term_style,
     )?;
     Ok(())
 }
@@ -215,82 +256,180 @@ fn handle_file_meta_header_line(
     config: &Config,
     comparing: bool,
 ) -> std::io::Result<()> {
-    let line = parse::get_file_change_description_from_file_paths(minus_file, plus_file, comparing);
-    handle_generic_file_meta_header_line(painter, &line, config)
+    let line = parse::get_file_change_description_from_file_paths(
+        minus_file, plus_file, comparing, config,
+    );
+    // FIXME: no support for 'raw'
+    handle_generic_file_meta_header_line(painter, &line, &line, config)
 }
 
 /// Write `line` with FileMeta styling.
 fn handle_generic_file_meta_header_line(
     painter: &mut Painter,
     line: &str,
+    raw_line: &str,
     config: &Config,
 ) -> std::io::Result<()> {
-    let draw_fn = match config.file_style {
-        cli::SectionStyle::Box => draw::write_boxed_with_line,
-        cli::SectionStyle::Underline => draw::write_underlined,
-        cli::SectionStyle::Plain => panic!(),
-        cli::SectionStyle::Omit => return Ok(()),
+    if config.file_style.is_omitted {
+        return Ok(());
+    }
+    let decoration_ansi_term_style;
+    let mut pad = false;
+    let draw_fn = match config.file_style.decoration_style {
+        DecorationStyle::Box(style) => {
+            pad = true;
+            decoration_ansi_term_style = style;
+            draw::write_boxed
+        }
+        DecorationStyle::BoxWithUnderline(style) => {
+            pad = true;
+            decoration_ansi_term_style = style;
+            draw::write_boxed_with_underline
+        }
+        DecorationStyle::BoxWithOverline(style) => {
+            pad = true;
+            decoration_ansi_term_style = style;
+            draw::write_boxed // TODO: not implemented
+        }
+        DecorationStyle::BoxWithUnderOverline(style) => {
+            pad = true;
+            decoration_ansi_term_style = style;
+            draw::write_boxed // TODO: not implemented
+        }
+        DecorationStyle::Underline(style) => {
+            decoration_ansi_term_style = style;
+            draw::write_underlined
+        }
+        DecorationStyle::Overline(style) => {
+            decoration_ansi_term_style = style;
+            draw::write_overlined
+        }
+        DecorationStyle::UnderOverline(style) => {
+            decoration_ansi_term_style = style;
+            draw::write_underoverlined
+        }
+        DecorationStyle::NoDecoration => {
+            decoration_ansi_term_style = ansi_term::Style::new();
+            draw::write_no_decoration
+        }
     };
     writeln!(painter.writer)?;
     draw_fn(
         painter.writer,
-        &paint::paint_text_foreground(line, config.file_color, config.true_color),
-        config.terminal_width,
-        config.file_color,
-        false,
-        config.true_color,
+        &format!("{}{}", line, if pad { " " } else { "" }),
+        &format!("{}{}", raw_line, if pad { " " } else { "" }),
+        &config.decorations_width,
+        config.file_style,
+        decoration_ansi_term_style,
     )?;
     Ok(())
 }
 
-fn handle_hunk_meta_line(
+fn handle_hunk_header_line(
     painter: &mut Painter,
     line: &str,
+    raw_line: &str,
     config: &Config,
 ) -> std::io::Result<()> {
-    let draw_fn = match config.hunk_style {
-        cli::SectionStyle::Box => draw::write_boxed,
-        cli::SectionStyle::Underline => draw::write_underlined,
-        cli::SectionStyle::Plain => panic!(),
-        cli::SectionStyle::Omit => return Ok(()),
+    if config.hunk_header_style.is_omitted {
+        return Ok(());
+    }
+    let decoration_ansi_term_style;
+    let draw_fn = match config.hunk_header_style.decoration_style {
+        DecorationStyle::Box(style) => {
+            decoration_ansi_term_style = style;
+            draw::write_boxed
+        }
+        DecorationStyle::BoxWithUnderline(style) => {
+            decoration_ansi_term_style = style;
+            draw::write_boxed_with_underline
+        }
+        DecorationStyle::BoxWithOverline(style) => {
+            decoration_ansi_term_style = style;
+            draw::write_boxed // TODO: not implemented
+        }
+        DecorationStyle::BoxWithUnderOverline(style) => {
+            decoration_ansi_term_style = style;
+            draw::write_boxed // TODO: not implemented
+        }
+        DecorationStyle::Underline(style) => {
+            decoration_ansi_term_style = style;
+            draw::write_underlined
+        }
+        DecorationStyle::Overline(style) => {
+            decoration_ansi_term_style = style;
+            draw::write_overlined
+        }
+        DecorationStyle::UnderOverline(style) => {
+            decoration_ansi_term_style = style;
+            draw::write_underoverlined
+        }
+        DecorationStyle::NoDecoration => {
+            decoration_ansi_term_style = ansi_term::Style::new();
+            draw::write_no_decoration
+        }
     };
-    let (raw_code_fragment, line_number) = parse::parse_hunk_metadata(&line);
-    let code_fragment = prepare(raw_code_fragment, false, config);
-    if !code_fragment.is_empty() {
-        let syntax_style_sections = Painter::get_line_syntax_style_sections(
-            &code_fragment,
-            true,
-            &mut painter.highlighter,
-            &painter.config,
-        );
-        Painter::paint_lines(
-            vec![syntax_style_sections],
-            vec![vec![(
-                style::NO_BACKGROUND_COLOR_STYLE_MODIFIER,
-                &code_fragment,
-            )]],
-            &mut painter.output_buffer,
-            config,
-            "",
-            style::NO_BACKGROUND_COLOR_STYLE_MODIFIER,
-            Some(false),
-        );
-        painter.output_buffer.pop(); // trim newline
+    let (raw_code_fragment, line_numbers) = parse::parse_hunk_metadata(&line);
+    painter.minus_line_number = line_numbers[0];
+    painter.plus_line_number = line_numbers[line_numbers.len() - 1];
+    if config.hunk_header_style.is_raw {
+        writeln!(painter.writer)?;
         draw_fn(
             painter.writer,
-            &painter.output_buffer,
-            config.terminal_width,
-            config.hunk_color,
-            false,
-            config.true_color,
+            &format!("{} ", line),
+            &format!("{} ", raw_line),
+            &config.decorations_width,
+            config.hunk_header_style,
+            decoration_ansi_term_style,
         )?;
-        painter.output_buffer.clear();
+    } else {
+        let line = match prepare(raw_code_fragment, false, config) {
+            s if s.len() > 0 => format!("{} ", s),
+            s => s,
+        };
+        writeln!(painter.writer)?;
+        if !line.is_empty() {
+            let lines = vec![line];
+            let syntax_style_sections = Painter::get_syntax_style_sections_for_lines(
+                &lines,
+                &State::HunkHeader,
+                &mut painter.highlighter,
+                &painter.config,
+            );
+            Painter::paint_lines(
+                syntax_style_sections,
+                vec![vec![(config.hunk_header_style, &lines[0])]],
+                vec![None],
+                &mut painter.output_buffer,
+                config,
+                "",
+                config.null_style,
+                config.null_style,
+                None,
+                Some(false),
+            );
+            painter.output_buffer.pop(); // trim newline
+            draw_fn(
+                painter.writer,
+                &painter.output_buffer,
+                &painter.output_buffer,
+                &config.decorations_width,
+                config.hunk_header_style,
+                decoration_ansi_term_style,
+            )?;
+            if !config.hunk_header_style.is_raw {
+                painter.output_buffer.clear()
+            };
+        }
+    };
+
+    if !config.line_numbers {
+        let line_number = &format!("{}", painter.plus_line_number);
+        match config.hunk_header_style.decoration_ansi_term_style() {
+            Some(style) => writeln!(painter.writer, "{}", style.paint(line_number))?,
+            None => writeln!(painter.writer, "{}", line_number)?,
+        }
     }
-    writeln!(
-        painter.writer,
-        "\n{}",
-        paint::paint_text_foreground(line_number, config.hunk_color, config.true_color)
-    )?;
     Ok(())
 }
 
@@ -329,31 +468,38 @@ fn handle_hunk_line(
         }
         Some(' ') => {
             let state = State::HunkZero;
-            let prefix = if line.is_empty() { "" } else { &line[..1] };
-            painter.paint_buffered_lines();
-            let line = prepare(&line, true, config);
-            let syntax_style_sections = if config.should_syntax_highlight(&state) {
-                Painter::get_line_syntax_style_sections(
-                    &line,
-                    true,
-                    &mut painter.highlighter,
-                    &painter.config,
-                )
+            let prefix = if config.keep_plus_minus_markers && !line.is_empty() {
+                &line[..1]
             } else {
-                vec![(style::get_no_style(), line.as_str())]
+                ""
             };
-            let diff_style_sections =
-                vec![(style::NO_BACKGROUND_COLOR_STYLE_MODIFIER, line.as_str())];
+            painter.paint_buffered_lines();
+            let lines = vec![prepare(&line, true, config)];
+            let syntax_style_sections = Painter::get_syntax_style_sections_for_lines(
+                &lines,
+                &state,
+                &mut painter.highlighter,
+                &painter.config,
+            );
+            let diff_style_sections = vec![(config.zero_style, lines[0].as_str())];
 
             Painter::paint_lines(
-                vec![syntax_style_sections],
+                syntax_style_sections,
                 vec![diff_style_sections],
+                vec![Some((
+                    Some(painter.minus_line_number),
+                    Some(painter.plus_line_number),
+                ))],
                 &mut painter.output_buffer,
                 config,
                 prefix,
-                style::NO_BACKGROUND_COLOR_STYLE_MODIFIER,
+                config.zero_style,
+                config.zero_style,
+                None,
                 None,
             );
+            painter.minus_line_number += 1;
+            painter.plus_line_number += 1;
             state
         }
         _ => {
@@ -381,10 +527,12 @@ fn prepare(line: &str, append_newline: bool, config: &Config) -> String {
         let mut line = line.graphemes(true);
 
         // The first column contains a -/+/space character, added by git. We substitute it for a
-        // space now, so that it is not present during syntax highlighting, and substitute again
-        // when emitting the line.
+        // space now, so that it is not present during syntax highlighting. When emitting the line
+        // in Painter::paint_lines, we drop the space (unless --keep-plus-minus-markers is in
+        // effect in which case we replace it with the appropriate marker).
+        // TODO: Things should, but do not, work if this leading space is omitted at this stage.
+        // See comment in align::Alignment::new.
         line.next();
-
         format!(" {}{}", expand_tabs(line, config.tab_width), terminator)
     } else {
         terminator.to_string()

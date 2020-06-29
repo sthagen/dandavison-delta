@@ -1,19 +1,21 @@
+use lazy_static::lazy_static;
+use regex::Regex;
 use std::io::Write;
-use std::str::FromStr;
 
 use ansi_term;
 use syntect::easy::HighlightLines;
-use syntect::highlighting::{Color, Style, StyleModifier};
+use syntect::highlighting::Style as SyntectStyle;
 use syntect::parsing::{SyntaxReference, SyntaxSet};
 
-use crate::bat::terminal::to_ansi_color;
 use crate::config;
 use crate::delta::State;
 use crate::edits;
+use crate::features::line_numbers;
 use crate::paint::superimpose_style_sections::superimpose_style_sections;
-use crate::style;
+use crate::style::Style;
 
-pub const ANSI_CSI_ERASE_IN_LINE: &str = "\x1b[K";
+pub const ANSI_CSI_CLEAR_TO_EOL: &str = "\x1b[0K";
+pub const ANSI_CSI_CLEAR_TO_BOL: &str = "\x1b[1K";
 pub const ANSI_SGR_RESET: &str = "\x1b[0m";
 
 pub struct Painter<'a> {
@@ -22,15 +24,17 @@ pub struct Painter<'a> {
     pub writer: &'a mut dyn Write,
     pub syntax: &'a SyntaxReference,
     pub highlighter: HighlightLines<'a>,
-    pub config: &'a config::Config<'a>,
+    pub config: &'a config::Config,
     pub output_buffer: String,
+    pub minus_line_number: usize,
+    pub plus_line_number: usize,
 }
 
 impl<'a> Painter<'a> {
     pub fn new(writer: &'a mut dyn Write, config: &'a config::Config) -> Self {
         let default_syntax = Self::get_syntax(&config.syntax_set, None);
         // TODO: Avoid doing this.
-        let dummy_highlighter = HighlightLines::new(default_syntax, &config.dummy_theme);
+        let dummy_highlighter = HighlightLines::new(default_syntax, &config.syntax_dummy_theme);
         Self {
             minus_lines: Vec::new(),
             plus_lines: Vec::new(),
@@ -39,6 +43,8 @@ impl<'a> Painter<'a> {
             highlighter: dummy_highlighter,
             writer,
             config,
+            minus_line_number: 0,
+            plus_line_number: 0,
         }
     }
 
@@ -53,35 +59,53 @@ impl<'a> Painter<'a> {
     }
 
     pub fn set_highlighter(&mut self) {
-        if let Some(ref theme) = self.config.theme {
-            self.highlighter = HighlightLines::new(self.syntax, &theme)
+        if let Some(ref syntax_theme) = self.config.syntax_theme {
+            self.highlighter = HighlightLines::new(self.syntax, &syntax_theme)
         };
     }
 
     pub fn paint_buffered_lines(&mut self) {
         let minus_line_syntax_style_sections = Self::get_syntax_style_sections_for_lines(
             &self.minus_lines,
-            self.config.should_syntax_highlight(&State::HunkMinus),
+            &State::HunkMinus,
             &mut self.highlighter,
             self.config,
         );
         let plus_line_syntax_style_sections = Self::get_syntax_style_sections_for_lines(
             &self.plus_lines,
-            self.config.should_syntax_highlight(&State::HunkPlus),
+            &State::HunkPlus,
             &mut self.highlighter,
             self.config,
         );
         let (minus_line_diff_style_sections, plus_line_diff_style_sections) =
             Self::get_diff_style_sections(&self.minus_lines, &self.plus_lines, self.config);
+
+        let mut minus_line_numbers = Vec::new();
+        let mut plus_line_numbers = Vec::new();
+        for _line in &self.minus_lines {
+            minus_line_numbers.push(Some((Some(self.minus_line_number), None)));
+            self.minus_line_number += 1;
+        }
+        for _line in &self.plus_lines {
+            plus_line_numbers.push(Some((None, Some(self.plus_line_number))));
+            self.plus_line_number += 1;
+        }
         // TODO: lines and style sections contain identical line text
         if !self.minus_lines.is_empty() {
             Painter::paint_lines(
                 minus_line_syntax_style_sections,
                 minus_line_diff_style_sections,
+                minus_line_numbers,
                 &mut self.output_buffer,
                 self.config,
-                self.config.minus_line_marker,
-                self.config.minus_style_modifier,
+                if self.config.keep_plus_minus_markers {
+                    "-"
+                } else {
+                    ""
+                },
+                self.config.minus_style,
+                self.config.minus_non_emph_style,
+                Some(self.config.minus_empty_line_marker_style),
                 None,
             );
         }
@@ -89,10 +113,17 @@ impl<'a> Painter<'a> {
             Painter::paint_lines(
                 plus_line_syntax_style_sections,
                 plus_line_diff_style_sections,
+                plus_line_numbers,
                 &mut self.output_buffer,
                 self.config,
-                self.config.plus_line_marker,
-                self.config.plus_style_modifier,
+                if self.config.keep_plus_minus_markers {
+                    "+"
+                } else {
+                    ""
+                },
+                self.config.plus_style,
+                self.config.plus_non_emph_style,
+                Some(self.config.plus_empty_line_marker_style),
                 None,
             );
         }
@@ -103,42 +134,73 @@ impl<'a> Painter<'a> {
     /// Superimpose background styles and foreground syntax
     /// highlighting styles, and write colored lines to output buffer.
     pub fn paint_lines(
-        syntax_style_sections: Vec<Vec<(Style, &str)>>,
-        diff_style_sections: Vec<Vec<(StyleModifier, &str)>>,
+        syntax_style_sections: Vec<Vec<(SyntectStyle, &str)>>,
+        diff_style_sections: Vec<Vec<(Style, &str)>>,
+        line_number_sections: Vec<Option<(Option<usize>, Option<usize>)>>,
         output_buffer: &mut String,
         config: &config::Config,
         prefix: &str,
-        background_style_modifier: StyleModifier,
+        style: Style,          // style for right fill if line contains no emph sections
+        non_emph_style: Style, // style for right fill if line contains emph sections
+        empty_line_style: Option<Style>, // a style with background color to highlight an empty line
         background_color_extends_to_terminal_width: Option<bool>,
     ) {
-        let background_style = config.no_style.apply(background_style_modifier);
-        let background_ansi_style = to_ansi_style(background_style, config.true_color);
-        for (syntax_sections, diff_sections) in
-            syntax_style_sections.iter().zip(diff_style_sections.iter())
+        // There's some unfortunate hackery going on here for two reasons:
+        //
+        // 1. The prefix needs to be injected into the output stream. We paint
+        //    this with whatever style the line starts with.
+        //
+        // 2. We must ensure that we fill rightwards with the appropriate
+        //    non-emph background color. In that case we don't use the last
+        //    style of the line, because this might be emph.
+
+        for ((syntax_sections, diff_sections), line_numbers) in syntax_style_sections
+            .iter()
+            .zip(diff_style_sections.iter())
+            .zip(line_number_sections.iter())
         {
+            let non_emph_style = if style_sections_contain_more_than_one_style(diff_sections) {
+                non_emph_style // line contains an emph section
+            } else {
+                style
+            };
+
+            let mut handled_prefix = false;
             let mut ansi_strings = Vec::new();
-            if prefix != "" {
-                ansi_strings.push(background_ansi_style.paint(prefix));
+            if config.line_numbers && line_numbers.is_some() {
+                ansi_strings.extend(line_numbers::format_and_paint_line_numbers(
+                    line_numbers,
+                    config,
+                ))
             }
-            let mut dropped_prefix = prefix == ""; // TODO: Hack
-            for (style, mut text) in superimpose_style_sections(syntax_sections, diff_sections) {
-                if !dropped_prefix {
+            for (section_style, mut text) in superimpose_style_sections(
+                syntax_sections,
+                diff_sections,
+                config.true_color,
+                config.null_syntect_style,
+            ) {
+                if !handled_prefix {
+                    if prefix != "" {
+                        ansi_strings.push(section_style.paint(prefix));
+                    }
                     if text.len() > 0 {
                         text.remove(0);
                     }
-                    dropped_prefix = true;
+                    handled_prefix = true;
                 }
-                ansi_strings.push(to_ansi_style(style, config.true_color).paint(text));
+                if !text.is_empty() {
+                    ansi_strings.push(section_style.paint(text));
+                }
             }
-            ansi_strings.push(background_ansi_style.paint(""));
+            let right_fill_background_color = non_emph_style.has_background_color()
+                && background_color_extends_to_terminal_width
+                    .unwrap_or(config.background_color_extends_to_terminal_width);
+            if right_fill_background_color {
+                ansi_strings.push(non_emph_style.paint(""));
+            }
             let line = &mut ansi_term::ANSIStrings(&ansi_strings).to_string();
-            let background_color_extends_to_terminal_width =
-                match background_color_extends_to_terminal_width {
-                    Some(boolean) => boolean,
-                    None => config.background_color_extends_to_terminal_width,
-                };
-            if background_color_extends_to_terminal_width {
-                // HACK: How to properly incorporate the ANSI_CSI_ERASE_IN_LINE into ansi_strings?
+            if right_fill_background_color {
+                // HACK: How to properly incorporate the ANSI_CSI_CLEAR_TO_EOL into ansi_strings?
                 if line
                     .to_lowercase()
                     .ends_with(&ANSI_SGR_RESET.to_lowercase())
@@ -146,8 +208,17 @@ impl<'a> Painter<'a> {
                     line.truncate(line.len() - ANSI_SGR_RESET.len());
                 }
                 output_buffer.push_str(&line);
-                output_buffer.push_str(ANSI_CSI_ERASE_IN_LINE);
+                output_buffer.push_str(ANSI_CSI_CLEAR_TO_EOL);
                 output_buffer.push_str(ANSI_SGR_RESET);
+            } else if line.is_empty() {
+                if let Some(empty_line_style) = empty_line_style {
+                    output_buffer.push_str(
+                        &empty_line_style
+                            .ansi_term_style
+                            .paint(ANSI_CSI_CLEAR_TO_BOL)
+                            .to_string(),
+                    );
+                }
             } else {
                 output_buffer.push_str(&line);
             }
@@ -162,139 +233,172 @@ impl<'a> Painter<'a> {
         Ok(())
     }
 
-    fn get_syntax_style_sections_for_lines<'s>(
-        lines: &'s [String],
-        should_syntax_highlight: bool,
+    pub fn should_compute_syntax_highlighting(state: &State, config: &config::Config) -> bool {
+        if config.syntax_theme.is_none() {
+            return false;
+        }
+        match state {
+            State::HunkMinus => {
+                config.minus_style.is_syntax_highlighted
+                    || config.minus_emph_style.is_syntax_highlighted
+            }
+            State::HunkZero => config.zero_style.is_syntax_highlighted,
+            State::HunkPlus => {
+                config.plus_style.is_syntax_highlighted
+                    || config.plus_emph_style.is_syntax_highlighted
+            }
+            State::HunkHeader => true,
+            _ => panic!(
+                "should_compute_syntax_highlighting is undefined for state {:?}",
+                state
+            ),
+        }
+    }
+
+    pub fn get_syntax_style_sections_for_lines<'s>(
+        lines: &'s Vec<String>,
+        state: &State,
         highlighter: &mut HighlightLines,
         config: &config::Config,
-    ) -> Vec<Vec<(Style, &'s str)>> {
+    ) -> Vec<Vec<(SyntectStyle, &'s str)>> {
+        let fake = !Painter::should_compute_syntax_highlighting(state, config);
         let mut line_sections = Vec::new();
         for line in lines.iter() {
-            line_sections.push(Painter::get_line_syntax_style_sections(
-                line,
-                should_syntax_highlight,
-                highlighter,
-                &config,
-            ));
+            if fake {
+                line_sections.push(vec![(config.null_syntect_style, line.as_str())])
+            } else {
+                line_sections.push(highlighter.highlight(line, &config.syntax_set))
+            }
         }
         line_sections
     }
 
-    pub fn get_line_syntax_style_sections(
-        line: &'a str,
-        should_syntax_highlight: bool,
-        highlighter: &mut HighlightLines,
-        config: &config::Config,
-    ) -> Vec<(Style, &'a str)> {
-        if should_syntax_highlight && config.theme.is_some() {
-            highlighter.highlight(line, &config.syntax_set)
-        } else {
-            vec![(config.no_style, line)]
-        }
-    }
-
     /// Set background styles to represent diff for minus and plus lines in buffer.
     fn get_diff_style_sections<'b>(
-        minus_lines: &'b [String],
-        plus_lines: &'b [String],
+        minus_lines: &'b Vec<String>,
+        plus_lines: &'b Vec<String>,
         config: &config::Config,
-    ) -> (
-        Vec<Vec<(StyleModifier, &'b str)>>,
-        Vec<Vec<(StyleModifier, &'b str)>>,
-    ) {
-        edits::infer_edits(
+    ) -> (Vec<Vec<(Style, &'b str)>>, Vec<Vec<(Style, &'b str)>>) {
+        let mut diff_sections = edits::infer_edits(
             minus_lines,
             plus_lines,
-            config.minus_style_modifier,
-            config.minus_emph_style_modifier,
-            config.plus_style_modifier,
-            config.plus_emph_style_modifier,
+            config.minus_style,
+            config.minus_emph_style,
+            config.plus_style,
+            config.plus_emph_style,
+            &config.tokenization_regex,
             config.max_line_distance,
             config.max_line_distance_for_naively_paired_lines,
-        )
+        );
+
+        let minus_non_emph_style = if config.minus_non_emph_style != config.minus_emph_style {
+            Some(config.minus_non_emph_style)
+        } else {
+            None
+        };
+        Self::update_styles(&mut diff_sections.0, None, minus_non_emph_style);
+        let plus_non_emph_style = if config.plus_non_emph_style != config.plus_emph_style {
+            Some(config.plus_non_emph_style)
+        } else {
+            None
+        };
+        Self::update_styles(
+            &mut diff_sections.1,
+            Some(config.whitespace_error_style),
+            plus_non_emph_style,
+        );
+        diff_sections
+    }
+
+    /// There are some rules according to which we update line section styles that were computed
+    /// during the initial edit inference pass. This function applies those rules. The rules are
+    /// 1. If there are multiple diff styles in the line, then the line must have some
+    ///    inferred edit operations and so, if there is a special non-emph style that is
+    ///    distinct from the default style, then it should be used for the non-emph style
+    ///    sections.
+    /// 2. If the line constitutes a whitespace error, then the whitespace error style
+    ///    should be applied to the added material.
+    fn update_styles(
+        style_sections: &mut Vec<Vec<(Style, &str)>>,
+        whitespace_error_style: Option<Style>,
+        non_emph_style: Option<Style>,
+    ) {
+        for line_sections in style_sections {
+            let line_has_emph_and_non_emph_sections =
+                style_sections_contain_more_than_one_style(line_sections);
+            let should_update_non_emph_styles =
+                non_emph_style.is_some() && line_has_emph_and_non_emph_sections;
+            let is_whitespace_error =
+                whitespace_error_style.is_some() && is_whitespace_error(line_sections);
+            for section in line_sections.iter_mut() {
+                // If the line as a whole constitutes a whitespace error then highlight this
+                // section if either (a) it is an emph section, or (b) the line lacks any
+                // emph/non-emph distinction.
+                if is_whitespace_error
+                    && (section.0.is_emph || !line_has_emph_and_non_emph_sections)
+                {
+                    *section = (whitespace_error_style.unwrap(), section.1);
+                }
+                // Otherwise, update the style if this is a non-emph section that needs updating.
+                else if should_update_non_emph_styles && !section.0.is_emph {
+                    *section = (non_emph_style.unwrap(), section.1);
+                }
+            }
+        }
     }
 }
 
-pub fn to_ansi_style(style: Style, true_color: bool) -> ansi_term::Style {
-    let mut ansi_style = ansi_term::Style::new();
-    if style.background != style::NO_COLOR {
-        ansi_style = ansi_style.on(to_ansi_color(style.background, true_color));
-    }
-    if style.foreground != style::NO_COLOR {
-        ansi_style = ansi_style.fg(to_ansi_color(style.foreground, true_color));
-    }
-    ansi_style
-}
-
-/// Write section text to buffer with shell escape codes specifying foreground and background color.
-pub fn paint_text(text: &str, style: Style, output_buffer: &mut String, true_color: bool) {
-    if text.is_empty() {
-        return;
-    }
-    let ansi_style = to_ansi_style(style, true_color);
-    output_buffer.push_str(&ansi_style.paint(text).to_string());
-}
-
-/// Return text together with shell escape codes specifying the foreground color.
-pub fn paint_text_foreground(text: &str, color: Color, true_color: bool) -> String {
-    to_ansi_color(color, true_color).paint(text).to_string()
-}
-
-#[allow(dead_code)]
-pub fn paint_text_background(text: &str, color: Color, true_color: bool) -> String {
-    let style = ansi_term::Style::new().on(to_ansi_color(color, true_color));
-    style.paint(text).to_string()
-}
-
-// See
-// https://en.wikipedia.org/wiki/ANSI_escape_code#8-bit
-pub fn ansi_color_name_to_number(name: &str) -> Option<u8> {
-    match name.to_lowercase().as_ref() {
-        "black" => Some(0),
-        "red" => Some(1),
-        "green" => Some(2),
-        "yellow" => Some(3),
-        "blue" => Some(4),
-        "magenta" => Some(5),
-        "purple" => Some(5),
-        "cyan" => Some(6),
-        "white" => Some(7),
-        "bright-black" => Some(8),
-        "bright-red" => Some(9),
-        "bright-green" => Some(10),
-        "bright-yellow" => Some(11),
-        "bright-blue" => Some(12),
-        "bright-magenta" => Some(13),
-        "bright-purple" => Some(13),
-        "bright-cyan" => Some(14),
-        "bright-white" => Some(15),
-        _ => None,
+// edits::annotate doesn't return "coalesced" annotations (see comment there), so we can't assume
+// that `sections.len() > 1 <=> (multiple styles)`.
+fn style_sections_contain_more_than_one_style(sections: &Vec<(Style, &str)>) -> bool {
+    if sections.len() > 1 {
+        let (first_style, _) = sections[0];
+        sections
+            .iter()
+            .filter(|(style, _)| *style != first_style)
+            .next()
+            .is_some()
+    } else {
+        false
     }
 }
 
-pub fn color_from_ansi_name(name: &str) -> Option<Color> {
-    ansi_color_name_to_number(name).and_then(color_from_ansi_number)
+lazy_static! {
+    static ref NON_WHITESPACE_REGEX: Regex = Regex::new(r"\S").unwrap();
 }
 
-/// Convert 8-bit ANSI code to #RGBA string with ANSI code in red channel and 0 in alpha channel.
-// See https://github.com/sharkdp/bat/pull/543
-pub fn color_from_ansi_number(n: u8) -> Option<Color> {
-    Color::from_str(&format!("#{:02x}000000", n)).ok()
+/// True iff the line represented by `sections` constitutes a whitespace error.
+// TODO: Git recognizes blank lines at end of file (blank-at-eof) as a whitespace error but delta
+// does not yet.
+// https://git-scm.com/docs/git-config#Documentation/git-config.txt-corewhitespace
+fn is_whitespace_error(sections: &Vec<(Style, &str)>) -> bool {
+    !sections
+        .iter()
+        .any(|(_, s)| NON_WHITESPACE_REGEX.is_match(s))
 }
 
 mod superimpose_style_sections {
-    use syntect::highlighting::{Style, StyleModifier};
+    use syntect::highlighting::Style as SyntectStyle;
+
+    use crate::bat::terminal::to_ansi_color;
+    use crate::style::Style;
 
     pub fn superimpose_style_sections(
-        sections_1: &[(Style, &str)],
-        sections_2: &[(StyleModifier, &str)],
+        sections_1: &[(SyntectStyle, &str)],
+        sections_2: &[(Style, &str)],
+        true_color: bool,
+        null_syntect_style: SyntectStyle,
     ) -> Vec<(Style, String)> {
-        coalesce(superimpose(
-            explode(sections_1)
-                .iter()
-                .zip(explode(sections_2))
-                .collect::<Vec<(&(Style, char), (StyleModifier, char))>>(),
-        ))
+        coalesce(
+            superimpose(
+                explode(sections_1)
+                    .iter()
+                    .zip(explode(sections_2))
+                    .collect::<Vec<(&(SyntectStyle, char), (Style, char))>>(),
+            ),
+            true_color,
+            null_syntect_style,
+        )
     }
 
     fn explode<T>(style_sections: &[(T, &str)]) -> Vec<(T, char)>
@@ -311,32 +415,50 @@ mod superimpose_style_sections {
     }
 
     fn superimpose(
-        style_section_pairs: Vec<(&(Style, char), (StyleModifier, char))>,
-    ) -> Vec<(Style, char)> {
-        let mut superimposed: Vec<(Style, char)> = Vec::new();
-        for ((style, char_1), (modifier, char_2)) in style_section_pairs {
+        style_section_pairs: Vec<(&(SyntectStyle, char), (Style, char))>,
+    ) -> Vec<((SyntectStyle, Style), char)> {
+        let mut superimposed: Vec<((SyntectStyle, Style), char)> = Vec::new();
+        for ((syntax_style, char_1), (style, char_2)) in style_section_pairs {
             if *char_1 != char_2 {
                 panic!(
                     "String mismatch encountered while superimposing style sections: '{}' vs '{}'",
                     *char_1, char_2
                 )
             }
-            superimposed.push((style.apply(modifier), *char_1));
+            superimposed.push(((*syntax_style, style), *char_1));
         }
         superimposed
     }
 
-    fn coalesce(style_sections: Vec<(Style, char)>) -> Vec<(Style, String)> {
+    fn coalesce(
+        style_sections: Vec<((SyntectStyle, Style), char)>,
+        true_color: bool,
+        null_syntect_style: SyntectStyle,
+    ) -> Vec<(Style, String)> {
+        let make_superimposed_style = |(syntect_style, style): (SyntectStyle, Style)| {
+            if style.is_syntax_highlighted && syntect_style != null_syntect_style {
+                Style {
+                    ansi_term_style: ansi_term::Style {
+                        foreground: Some(to_ansi_color(syntect_style.foreground, true_color)),
+                        ..style.ansi_term_style
+                    },
+                    ..style
+                }
+            } else {
+                style
+            }
+        };
         let mut coalesced: Vec<(Style, String)> = Vec::new();
         let mut style_sections = style_sections.iter();
-        if let Some((style, c)) = style_sections.next() {
+        if let Some((style_pair, c)) = style_sections.next() {
             let mut current_string = c.to_string();
-            let mut current_style = style;
-            for (style, c) in style_sections {
-                if style != current_style {
-                    coalesced.push((*current_style, current_string));
+            let mut current_style_pair = style_pair;
+            for (style_pair, c) in style_sections {
+                if style_pair != current_style_pair {
+                    let style = make_superimposed_style(*current_style_pair);
+                    coalesced.push((style, current_string));
                     current_string = String::new();
-                    current_style = style;
+                    current_style_pair = style_pair;
                 }
                 current_string.push(*c);
             }
@@ -347,51 +469,109 @@ mod superimpose_style_sections {
                 // highlighter to work correctly.
                 current_string.truncate(current_string.len() - 1);
             }
-
-            coalesced.push((*current_style, current_string));
+            let style = make_superimposed_style(*current_style_pair);
+            coalesced.push((style, current_string));
         }
         coalesced
     }
 
     #[cfg(test)]
     mod tests {
-        use super::*;
-        use syntect::highlighting::{Color, FontStyle, Style, StyleModifier};
+        use lazy_static::lazy_static;
 
-        const STYLE: Style = Style {
-            foreground: Color::BLACK,
-            background: Color::BLACK,
-            font_style: FontStyle::BOLD,
-        };
-        const STYLE_MODIFIER: StyleModifier = StyleModifier {
-            foreground: Some(Color::WHITE),
-            background: Some(Color::WHITE),
-            font_style: Some(FontStyle::UNDERLINE),
-        };
-        const SUPERIMPOSED_STYLE: Style = Style {
-            foreground: Color::WHITE,
-            background: Color::WHITE,
-            font_style: FontStyle::UNDERLINE,
-        };
+        use super::*;
+        use ansi_term::{self, Color};
+        use syntect::highlighting::Color as SyntectColor;
+        use syntect::highlighting::FontStyle as SyntectFontStyle;
+        use syntect::highlighting::Style as SyntectStyle;
+
+        use crate::style::{DecorationStyle, Style};
+
+        lazy_static! {
+            static ref SYNTAX_STYLE: SyntectStyle = SyntectStyle {
+                foreground: SyntectColor::BLACK,
+                background: SyntectColor::BLACK,
+                font_style: SyntectFontStyle::BOLD,
+            };
+        }
+        lazy_static! {
+            static ref SYNTAX_HIGHLIGHTED_STYLE: Style = Style {
+                ansi_term_style: ansi_term::Style {
+                    foreground: Some(Color::White),
+                    background: Some(Color::White),
+                    is_underline: true,
+                    ..ansi_term::Style::new()
+                },
+                is_emph: false,
+                is_omitted: false,
+                is_raw: false,
+                is_syntax_highlighted: true,
+                decoration_style: DecorationStyle::NoDecoration,
+            };
+        }
+        lazy_static! {
+            static ref NON_SYNTAX_HIGHLIGHTED_STYLE: Style = Style {
+                ansi_term_style: ansi_term::Style {
+                    foreground: Some(Color::White),
+                    background: Some(Color::White),
+                    is_underline: true,
+                    ..ansi_term::Style::new()
+                },
+                is_emph: false,
+                is_omitted: false,
+                is_raw: false,
+                is_syntax_highlighted: false,
+                decoration_style: DecorationStyle::NoDecoration,
+            };
+        }
+        lazy_static! {
+            static ref SUPERIMPOSED_STYLE: Style = Style {
+                ansi_term_style: ansi_term::Style {
+                    foreground: Some(to_ansi_color(SyntectColor::BLACK, true)),
+                    background: Some(Color::White),
+                    is_underline: true,
+                    ..ansi_term::Style::new()
+                },
+                is_emph: false,
+                is_omitted: false,
+                is_raw: false,
+                is_syntax_highlighted: true,
+                decoration_style: DecorationStyle::NoDecoration,
+            };
+        }
 
         #[test]
         fn test_superimpose_style_sections_1() {
-            let sections_1 = vec![(STYLE, "ab")];
-            let sections_2 = vec![(STYLE_MODIFIER, "ab")];
-            let superimposed = vec![(SUPERIMPOSED_STYLE, "ab".to_string())];
+            let sections_1 = vec![(*SYNTAX_STYLE, "ab")];
+            let sections_2 = vec![(*SYNTAX_HIGHLIGHTED_STYLE, "ab")];
+            let superimposed = vec![(*SUPERIMPOSED_STYLE, "ab".to_string())];
             assert_eq!(
-                superimpose_style_sections(&sections_1, &sections_2),
+                superimpose_style_sections(&sections_1, &sections_2, true, SyntectStyle::default()),
                 superimposed
             );
         }
 
         #[test]
         fn test_superimpose_style_sections_2() {
-            let sections_1 = vec![(STYLE, "ab")];
-            let sections_2 = vec![(STYLE_MODIFIER, "a"), (STYLE_MODIFIER, "b")];
-            let superimposed = vec![(SUPERIMPOSED_STYLE, String::from("ab"))];
+            let sections_1 = vec![(*SYNTAX_STYLE, "ab")];
+            let sections_2 = vec![
+                (*SYNTAX_HIGHLIGHTED_STYLE, "a"),
+                (*SYNTAX_HIGHLIGHTED_STYLE, "b"),
+            ];
+            let superimposed = vec![(*SUPERIMPOSED_STYLE, String::from("ab"))];
             assert_eq!(
-                superimpose_style_sections(&sections_1, &sections_2),
+                superimpose_style_sections(&sections_1, &sections_2, true, SyntectStyle::default()),
+                superimposed
+            );
+        }
+
+        #[test]
+        fn test_superimpose_style_sections_3() {
+            let sections_1 = vec![(*SYNTAX_STYLE, "ab")];
+            let sections_2 = vec![(*NON_SYNTAX_HIGHLIGHTED_STYLE, "ab")];
+            let superimposed = vec![(*NON_SYNTAX_HIGHLIGHTED_STYLE, "ab".to_string())];
+            assert_eq!(
+                superimpose_style_sections(&sections_1, &sections_2, true, SyntectStyle::default()),
                 superimposed
             );
         }
@@ -407,9 +587,12 @@ mod superimpose_style_sections {
 
         #[test]
         fn test_superimpose() {
-            let x = (STYLE, 'a');
-            let pairs = vec![(&x, (STYLE_MODIFIER, 'a'))];
-            assert_eq!(superimpose(pairs), vec![(SUPERIMPOSED_STYLE, 'a')]);
+            let x = (*SYNTAX_STYLE, 'a');
+            let pairs = vec![(&x, (*SYNTAX_HIGHLIGHTED_STYLE, 'a'))];
+            assert_eq!(
+                superimpose(pairs),
+                vec![((*SYNTAX_STYLE, *SYNTAX_HIGHLIGHTED_STYLE), 'a')]
+            );
         }
     }
 }

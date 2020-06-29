@@ -1,4 +1,11 @@
+use lazy_static::lazy_static;
+use regex::Regex;
 use std::path::Path;
+
+use crate::config::Config;
+
+// https://git-scm.com/docs/git-config#Documentation/git-config.txt-diffmnemonicPrefix
+const DIFF_PREFIXES: [&str; 6] = ["a/", "b/", "c/", "i/", "o/", "w/"];
 
 /// Given input like
 /// "--- one.rs	2019-11-20 06:16:08.000000000 +0100"
@@ -24,7 +31,7 @@ pub fn get_file_path_from_file_meta_line(line: &str, git_diff_name: bool) -> Str
             let offset = 4;
             match &line[offset..] {
                 path if path == "/dev/null" => "/dev/null",
-                path if git_diff_name && (path.starts_with("a/") || path.starts_with("b/")) => {
+                path if git_diff_name && DIFF_PREFIXES.iter().any(|s| path.starts_with(s)) => {
                     &path[2..]
                 }
                 path if git_diff_name => &path,
@@ -48,30 +55,70 @@ pub fn get_file_change_description_from_file_paths(
     minus_file: &str,
     plus_file: &str,
     comparing: bool,
+    config: &Config,
 ) -> String {
     if comparing {
         format!("comparing: {} ⟶   {}", minus_file, plus_file)
     } else {
+        let format_label = |label: &str| {
+            if label.len() > 0 {
+                format!("{} ", label)
+            } else {
+                "".to_string()
+            }
+        };
         match (minus_file, plus_file) {
-            (minus_file, plus_file) if minus_file == plus_file => minus_file.to_string(),
-            (minus_file, "/dev/null") => format!("deleted: {}", minus_file),
-            ("/dev/null", plus_file) => format!("added: {}", plus_file),
-            (minus_file, plus_file) => format!("renamed: {} ⟶   {}", minus_file, plus_file),
+            (minus_file, plus_file) if minus_file == plus_file => format!(
+                "{}{}",
+                format_label(&config.file_modified_label),
+                minus_file
+            ),
+            (minus_file, "/dev/null") => {
+                format!("{}{}", format_label(&config.file_removed_label), minus_file)
+            }
+            ("/dev/null", plus_file) => {
+                format!("{}{}", format_label(&config.file_added_label), plus_file)
+            }
+            (minus_file, plus_file) => format!(
+                "{}{} ⟶   {}",
+                format_label(&config.file_renamed_label),
+                minus_file,
+                plus_file
+            ),
         }
     }
 }
 
+lazy_static! {
+    static ref HUNK_METADATA_REGEXP: Regex =
+        Regex::new(r"@+ (?P<lns>([-+]\d+(?:,\d+)? ){2,4})@+(?P<cf>.*\s?)").unwrap();
+}
+
+lazy_static! {
+    static ref LINE_NUMBER_REGEXP: Regex = Regex::new(r"[-+]").unwrap();
+}
+
+fn _make_line_number_vec(line: &str) -> Vec<usize> {
+    let mut numbers = Vec::<usize>::new();
+
+    for s in LINE_NUMBER_REGEXP.split(line) {
+        let number = s.split(',').nth(0).unwrap().split_whitespace().nth(0);
+        match number {
+            Some(number) => numbers.push(number.parse::<usize>().unwrap()),
+            None => continue,
+        }
+    }
+    return numbers;
+}
+
 /// Given input like
 /// "@@ -74,15 +74,14 @@ pub fn delta("
-/// Return " pub fn delta("
-pub fn parse_hunk_metadata(line: &str) -> (&str, &str) {
-    let mut iter = line.split("@@").skip(1);
-    let line_number = iter
-        .next()
-        .and_then(|s| s.split('+').nth(1).and_then(|s| s.split(',').next()))
-        .unwrap_or("");
-    let code_fragment = iter.next().unwrap_or("");
-    (code_fragment, line_number)
+/// Return " pub fn delta(" and a vector of line numbers
+pub fn parse_hunk_metadata(line: &str) -> (&str, Vec<usize>) {
+    let caps = HUNK_METADATA_REGEXP.captures(line).unwrap();
+    let line_numbers = _make_line_number_vec(caps.name("lns").unwrap().as_str());
+    let code_fragment = caps.name("cf").unwrap().as_str();
+    return (code_fragment, line_numbers);
 }
 
 /// Attempt to parse input as a file path and return extension as a &str.
@@ -153,14 +200,12 @@ mod tests {
             get_file_path_from_file_meta_line("--- /dev/null", true),
             "/dev/null"
         );
-        assert_eq!(
-            get_file_path_from_file_meta_line("--- a/src/delta.rs", true),
-            "src/delta.rs"
-        );
-        assert_eq!(
-            get_file_path_from_file_meta_line("+++ b/src/delta.rs", true),
-            "src/delta.rs"
-        );
+        for prefix in &DIFF_PREFIXES {
+            assert_eq!(
+                get_file_path_from_file_meta_line(&format!("--- {}src/delta.rs", prefix), true),
+                "src/delta.rs"
+            );
+        }
         assert_eq!(
             get_file_path_from_file_meta_line("--- src/delta.rs", true),
             "src/delta.rs"
@@ -225,9 +270,42 @@ mod tests {
 
     #[test]
     fn test_parse_hunk_metadata() {
-        assert_eq!(
-            parse_hunk_metadata("@@ -74,15 +75,14 @@ pub fn delta(\n"),
-            (" pub fn delta(\n", "75")
-        );
+        let parsed = parse_hunk_metadata("@@ -74,15 +75,14 @@ pub fn delta(\n");
+        let code_fragment = parsed.0;
+        let line_numbers = parsed.1;
+        assert_eq!(code_fragment, " pub fn delta(\n",);
+        assert_eq!(line_numbers[0], 74,);
+        assert_eq!(line_numbers[1], 75,);
+    }
+
+    #[test]
+    fn test_parse_hunk_metadata_added_file() {
+        let parsed = parse_hunk_metadata("@@ -1,22 +0,0 @@");
+        let code_fragment = parsed.0;
+        let line_numbers = parsed.1;
+        assert_eq!(code_fragment, "",);
+        assert_eq!(line_numbers[0], 1,);
+        assert_eq!(line_numbers[1], 0,);
+    }
+
+    #[test]
+    fn test_parse_hunk_metadata_deleted_file() {
+        let parsed = parse_hunk_metadata("@@ -0,0 +1,3 @@");
+        let code_fragment = parsed.0;
+        let line_numbers = parsed.1;
+        assert_eq!(code_fragment, "",);
+        assert_eq!(line_numbers[0], 0,);
+        assert_eq!(line_numbers[1], 1,);
+    }
+
+    #[test]
+    fn test_parse_hunk_metadata_merge() {
+        let parsed = parse_hunk_metadata("@@@ -293,11 -358,15 +358,16 @@@ dependencies =");
+        let code_fragment = parsed.0;
+        let line_numbers = parsed.1;
+        assert_eq!(code_fragment, " dependencies =",);
+        assert_eq!(line_numbers[0], 293,);
+        assert_eq!(line_numbers[1], 358,);
+        assert_eq!(line_numbers[2], 358,);
     }
 }

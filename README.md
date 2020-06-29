@@ -74,14 +74,17 @@ Delta provides language syntax-highlighting, within-line insertion/deletion dete
 <br>
 
 ## Features
-|                                                | delta | git | diff-so-fancy | github/gitlab |
-|------------------------------------------------|-------|-----|---------------|---------------|
-| language syntax highlighting                   | ✅    | ❌  | ❌            | ✅             |
-| within-line insertion/deletion detection       | ✅    | ❌  | ✅            | ✅             |
-| multiple insertion/deletions detected per line | ✅    | ❌  | ❌            | ✅             |
-| matching of unequal numbers of changed lines   | ✅    | ❌  | ❌            | ❌             |
+|                                                | delta | git | [diff-so-fancy] /<br>[diff-highlight] | github/gitlab |
+|------------------------------------------------|-------|-----|---------------------------------------|---------------|
+| language syntax highlighting                   | ✅    | ❌  | ❌                                   | ✅            |
+| within-line insertion/deletion detection       | ✅    | ❌  | ✅                                   | ✅            |
+| multiple insertion/deletions detected per line | ✅    | ❌  | ❌                                   | ✅            |
+| matching of unequal numbers of changed lines   | ✅    | ❌  | ❌                                   | ❌            |
 
 In addition, delta handles traditional unified diff output.
+
+[diff-so-fancy]: https://github.com/so-fancy/diff-so-fancy
+[diff-highlight]: https://github.com/git/git/tree/master/contrib/diff-highlight
 
 ## Installation
 
@@ -129,7 +132,7 @@ Alternatively, delta is available in the following package managers:
   </tr>
 </table>
 
-#### Configure git to use delta
+## Configure git to use delta
 
 Set delta to be git's pager in your `.gitconfig`. Delta accepts many command line options to alter colors and other details of the output. An example is
 ```
@@ -350,7 +353,7 @@ All delta color options work the same way. There are three ways to specify a col
   </tr>
   <tr>
     <td>
-      delta vs. diff-so-fancy
+      delta vs. diff-so-fancy /<br>diff-highlight
     </td>
     <td>
       <img width=500px style="border: 1px solid black"
@@ -381,10 +384,27 @@ All delta color options work the same way. There are three ways to specify a col
 </table>
 
 
+## Build delta from source
 
+You'll need to [install the rust tools](https://www.rust-lang.org/learn/get-started). Then:
+
+```
+cargo build --release
+```
+
+and use the executable found at `./target/release/delta`.
 
 
 ## Credit
-  https://github.com/trishume/syntect<br>
-  https://github.com/sharkdp/bat<br>
-  https://github.com/so-fancy/diff-so-fancy
+- [ogham/rust-ansi-term](https://github.com/ogham/rust-ansi-term)
+- [sharkdp/bat](https://github.com/sharkdp/bat)
+- [so-fancy/diff-so-fancy](https://github.com/so-fancy/diff-so-fancy)
+- [trishume/syntect](https://github.com/trishume/syntect)
+
+
+## Projects using delta
+- [wfxr/forgit](https://github.com/wfxr/forgit)
+- [bigH/git-fuzzy](https://github.com/bigH/git-fuzzy)
+- [dandavison/magit-delta](https://github.com/dandavison/magit-delta)
+- [jesseduffield/lazygit](https://github.com/jesseduffield/lazygit/)
+- [ms-jpq/sad](https://github.com/ms-jpq/sad)
