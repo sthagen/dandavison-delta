@@ -71,7 +71,7 @@ where
             source = detect_source(&line);
         }
         if line.starts_with("commit ") {
-            painter.paint_buffered_lines();
+            painter.paint_buffered_minus_and_plus_lines();
             state = State::CommitMeta;
             if should_handle(&state, config) {
                 painter.emit()?;
@@ -79,7 +79,7 @@ where
                 continue;
             }
         } else if line.starts_with("diff ") {
-            painter.paint_buffered_lines();
+            painter.paint_buffered_minus_and_plus_lines();
             state = State::FileMeta;
         } else if (state == State::FileMeta || source == Source::DiffUnified)
             && (line.starts_with("--- ") || line.starts_with("rename from "))
@@ -136,7 +136,7 @@ where
             // proposal for more robust parsing logic.
 
             state = State::FileMeta;
-            painter.paint_buffered_lines();
+            painter.paint_buffered_minus_and_plus_lines();
             if should_handle(&State::FileMeta, config) {
                 painter.emit()?;
                 handle_generic_file_meta_header_line(&mut painter, &line, &raw_line, config)?;
@@ -159,7 +159,7 @@ where
         }
     }
 
-    painter.paint_buffered_lines();
+    painter.paint_buffered_minus_and_plus_lines();
     painter.emit()?;
     Ok(())
 }
@@ -178,9 +178,12 @@ fn should_handle(state: &State, config: &Config) -> bool {
 fn detect_source(line: &str) -> Source {
     if line.starts_with("commit ") || line.starts_with("diff --git ") {
         Source::GitDiff
-    } else if line.starts_with("diff -u ")
+    } else if line.starts_with("diff -u")
+        || line.starts_with("diff -ru")
+        || line.starts_with("diff -r -u")
         || line.starts_with("diff -U")
         || line.starts_with("--- ")
+        || line.starts_with("Only in ")
     {
         Source::DiffUnified
     } else {
@@ -369,9 +372,8 @@ fn handle_hunk_header_line(
             draw::write_no_decoration
         }
     };
-    let (raw_code_fragment, line_numbers) = parse::parse_hunk_metadata(&line);
-    painter.minus_line_number = line_numbers[0];
-    painter.plus_line_number = line_numbers[line_numbers.len() - 1];
+    let (raw_code_fragment, line_numbers) = parse::parse_hunk_header(&line);
+    // Emit the hunk header, with any requested decoration
     if config.hunk_header_style.is_raw {
         writeln!(painter.writer)?;
         draw_fn(
@@ -383,7 +385,7 @@ fn handle_hunk_header_line(
             decoration_ansi_term_style,
         )?;
     } else {
-        let line = match prepare(raw_code_fragment, false, config) {
+        let line = match painter.prepare(&raw_code_fragment, false) {
             s if s.len() > 0 => format!("{} ", s),
             s => s,
         };
@@ -399,12 +401,11 @@ fn handle_hunk_header_line(
             Painter::paint_lines(
                 syntax_style_sections,
                 vec![vec![(config.hunk_header_style, &lines[0])]],
-                vec![None],
+                &State::HunkHeader,
                 &mut painter.output_buffer,
                 config,
+                &mut None,
                 "",
-                config.null_style,
-                config.null_style,
                 None,
                 Some(false),
             );
@@ -422,12 +423,18 @@ fn handle_hunk_header_line(
             };
         }
     };
-
-    if !config.line_numbers {
-        let line_number = &format!("{}", painter.plus_line_number);
+    // Emit a single line number, or prepare for full line-numbering
+    if config.line_numbers {
+        painter.line_numbers_data.initialize_hunk(line_numbers);
+    } else {
+        let plus_line_number = line_numbers[line_numbers.len() - 1].0;
         match config.hunk_header_style.decoration_ansi_term_style() {
-            Some(style) => writeln!(painter.writer, "{}", style.paint(line_number))?,
-            None => writeln!(painter.writer, "{}", line_number)?,
+            Some(style) => writeln!(
+                painter.writer,
+                "{}",
+                style.paint(format!("{}", plus_line_number))
+            )?,
+            None => writeln!(painter.writer, "{}", plus_line_number)?,
         }
     }
     Ok(())
@@ -452,104 +459,35 @@ fn handle_hunk_line(
     if painter.minus_lines.len() > config.max_buffered_lines
         || painter.plus_lines.len() > config.max_buffered_lines
     {
-        painter.paint_buffered_lines();
+        painter.paint_buffered_minus_and_plus_lines();
     }
     match line.chars().next() {
         Some('-') => {
             if state == State::HunkPlus {
-                painter.paint_buffered_lines();
+                painter.paint_buffered_minus_and_plus_lines();
             }
-            painter.minus_lines.push(prepare(&line, true, config));
+            painter.minus_lines.push(painter.prepare(&line, true));
             State::HunkMinus
         }
         Some('+') => {
-            painter.plus_lines.push(prepare(&line, true, config));
+            painter.plus_lines.push(painter.prepare(&line, true));
             State::HunkPlus
         }
         Some(' ') => {
-            let state = State::HunkZero;
-            let prefix = if config.keep_plus_minus_markers && !line.is_empty() {
-                &line[..1]
-            } else {
-                ""
-            };
-            painter.paint_buffered_lines();
-            let lines = vec![prepare(&line, true, config)];
-            let syntax_style_sections = Painter::get_syntax_style_sections_for_lines(
-                &lines,
-                &state,
-                &mut painter.highlighter,
-                &painter.config,
-            );
-            let diff_style_sections = vec![(config.zero_style, lines[0].as_str())];
-
-            Painter::paint_lines(
-                syntax_style_sections,
-                vec![diff_style_sections],
-                vec![Some((
-                    Some(painter.minus_line_number),
-                    Some(painter.plus_line_number),
-                ))],
-                &mut painter.output_buffer,
-                config,
-                prefix,
-                config.zero_style,
-                config.zero_style,
-                None,
-                None,
-            );
-            painter.minus_line_number += 1;
-            painter.plus_line_number += 1;
-            state
+            painter.paint_buffered_minus_and_plus_lines();
+            painter.paint_zero_line(&line);
+            State::HunkZero
         }
         _ => {
             // The first character here could be e.g. '\' from '\ No newline at end of file'. This
             // is not a hunk line, but the parser does not have a more accurate state corresponding
             // to this.
-            painter.paint_buffered_lines();
+            painter.paint_buffered_minus_and_plus_lines();
             painter
                 .output_buffer
-                .push_str(&expand_tabs(raw_line.graphemes(true), config.tab_width));
+                .push_str(&painter.expand_tabs(raw_line.graphemes(true)));
             painter.output_buffer.push_str("\n");
             State::HunkZero
         }
-    }
-}
-
-/// Replace initial -/+ character with ' ', expand tabs as spaces, and optionally terminate with
-/// newline.
-// Terminating with newline character is necessary for many of the sublime syntax definitions to
-// highlight correctly.
-// See https://docs.rs/syntect/3.2.0/syntect/parsing/struct.SyntaxSetBuilder.html#method.add_from_folder
-fn prepare(line: &str, append_newline: bool, config: &Config) -> String {
-    let terminator = if append_newline { "\n" } else { "" };
-    if !line.is_empty() {
-        let mut line = line.graphemes(true);
-
-        // The first column contains a -/+/space character, added by git. We substitute it for a
-        // space now, so that it is not present during syntax highlighting. When emitting the line
-        // in Painter::paint_lines, we drop the space (unless --keep-plus-minus-markers is in
-        // effect in which case we replace it with the appropriate marker).
-        // TODO: Things should, but do not, work if this leading space is omitted at this stage.
-        // See comment in align::Alignment::new.
-        line.next();
-        format!(" {}{}", expand_tabs(line, config.tab_width), terminator)
-    } else {
-        terminator.to_string()
-    }
-}
-
-/// Expand tabs as spaces.
-/// tab_width = 0 is documented to mean do not replace tabs.
-fn expand_tabs<'a, I>(line: I, tab_width: usize) -> String
-where
-    I: Iterator<Item = &'a str>,
-{
-    if tab_width > 0 {
-        let tab_replacement = " ".repeat(tab_width);
-        line.map(|s| if s == "\t" { &tab_replacement } else { s })
-            .collect::<String>()
-    } else {
-        line.collect::<String>()
     }
 }

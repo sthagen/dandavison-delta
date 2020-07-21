@@ -1,4 +1,4 @@
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 #[cfg(test)]
 use std::ffi::OsString;
 use std::path::PathBuf;
@@ -7,12 +7,15 @@ use itertools;
 use lazy_static::lazy_static;
 use structopt::clap::AppSettings::{ColorAlways, ColoredHelp, DeriveDisplayOrder};
 use structopt::{clap, StructOpt};
+use syntect::highlighting::Theme as SyntaxTheme;
+use syntect::parsing::SyntaxSet;
 
+use crate::bat::assets::HighlightingAssets;
+use crate::bat::output::PagingMode;
 use crate::git_config::GitConfig;
-use crate::rewrite_options;
-use crate::set_options;
+use crate::options;
 
-#[derive(StructOpt, Clone, Debug, PartialEq)]
+#[derive(StructOpt, Clone, Default)]
 #[structopt(
     name = "delta",
     about = "A viewer for git and diff output",
@@ -61,7 +64,7 @@ https://git-scm.com/docs/git-config#Documentation/git-config.txt-color
 
 Here is an example:
 
---minus-style 'red bold ul #ffeeee'
+--minus-style 'red bold ul \"#ffeeee\"'
 
 That means: For removed lines, set the foreground (text) color to 'red', make it bold and
             underlined, and set the background color to '#ffeeee'.
@@ -78,6 +81,9 @@ That means: For removed lines, syntax-highlight the text, and make it bold, and 
 
 The available attributes are: 'blink', 'bold', 'dim', 'hidden', 'italic', 'reverse', 'strike',
 and 'ul' (or 'underline').
+
+The attribute 'omit' is supported by commit-style, file-style, and hunk-header-style, meaning to
+remove the element entirely from the output.
 
 A complete description of the style string syntax follows:
 
@@ -177,15 +183,15 @@ of the line number columns. Their values are arbitrary format strings, which are
 the placeholders {nm} for the line number associated with the old version of the file and {np} for
 the line number associated with the new version of the file. The placeholders support a subset of
 the string formatting syntax documented here: https://doc.rust-lang.org/std/fmt/#formatting-parameters.
-Specifically, you can use the alignment, width, and fill syntax.
+Specifically, you can use the alignment and width syntax.
 
 For example, the default value of --line-numbers-left-format is '{nm:^4}⋮'. This means that the
 left column should display the minus line number (nm), center-aligned, padded with spaces to a
 width of 4 characters, followed by a unicode dividing-line character (⋮).
 
-Similarly, the default value of --line-numbers-right-format is '{np:^4}│ '. This means that the
+Similarly, the default value of --line-numbers-right-format is '{np:^4}│'. This means that the
 right column should display the plus line number (np), center-aligned, padded with spaces to a
-width of 4 characters, followed by a unicode dividing-line character (│), and a space.
+width of 4 characters, followed by a unicode dividing-line character (│).
 
 Use '<' for left-align, '^' for center-align, and '>' for right-align.
 
@@ -195,6 +201,79 @@ https://github.com/dandavison/delta/issues.
 "
 )]
 pub struct Opt {
+    /// Use default colors appropriate for a light terminal background. For more control, see the
+    /// style options and --syntax-theme.
+    #[structopt(long = "light")]
+    pub light: bool,
+
+    /// Use default colors appropriate for a dark terminal background. For more control, see the
+    /// style options and --syntax-theme.
+    #[structopt(long = "dark")]
+    pub dark: bool,
+
+    /// Display line numbers next to the diff. See LINE NUMBERS section.
+    #[structopt(short = "n", long = "line-numbers")]
+    pub line_numbers: bool,
+
+    /// Display a side-by-side diff view instead of the traditional view.
+    #[structopt(short = "s", long = "side-by-side")]
+    pub side_by_side: bool,
+
+    #[structopt(long = "diff-highlight")]
+    /// Emulate diff-highlight (https://github.com/git/git/tree/master/contrib/diff-highlight)
+    pub diff_highlight: bool,
+
+    #[structopt(long = "diff-so-fancy")]
+    /// Emulate diff-so-fancy (https://github.com/so-fancy/diff-so-fancy)
+    pub diff_so_fancy: bool,
+
+    #[structopt(long = "navigate")]
+    /// Activate diff navigation: use n to jump forwards and N to jump backwards. To change the
+    /// file labels used see --file-modified-label, --file-removed-label, --file-added-label,
+    /// --file-renamed-label.
+    pub navigate: bool,
+
+    #[structopt(long = "keep-plus-minus-markers")]
+    /// Prefix added/removed lines with a +/- character, exactly as git does. By default, delta
+    /// does not emit any prefix, so code can be copied directly from delta's output.
+    pub keep_plus_minus_markers: bool,
+
+    /// Display the active values for all Delta options. Style options are displayed with
+    /// foreground and background colors. This can be used to experiment with colors by combining
+    /// this option with other options such as --minus-style, --zero-style, --plus-style, --light,
+    /// --dark, etc.
+    #[structopt(long = "show-config")]
+    pub show_config: bool,
+
+    /// List supported languages and associated file extensions.
+    #[structopt(long = "list-languages")]
+    pub list_languages: bool,
+
+    /// List available syntax-highlighting color themes.
+    #[structopt(long = "list-syntax-themes")]
+    pub list_syntax_themes: bool,
+
+    /// Show all available syntax-highlighting themes, each with an example of highlighted diff output.
+    /// If diff output is supplied on standard input then this will be used for the demo. For
+    /// example: `git show --color=always | delta --show-syntax-themes`.
+    #[structopt(long = "show-syntax-themes")]
+    pub show_syntax_themes: bool,
+
+    #[structopt(long = "no-gitconfig")]
+    /// Do not take any settings from git config. See GIT CONFIG section.
+    pub no_gitconfig: bool,
+
+    #[structopt(long = "raw")]
+    /// Do not alter the input in any way. This is mainly intended for testing delta.
+    pub raw: bool,
+
+    #[structopt(long = "color-only")]
+    /// Do not alter the input structurally in any way, but color and highlight hunk lines
+    /// according to your delta configuration. This is mainly intended for other tools that use
+    /// delta.
+    pub color_only: bool,
+
+    ////////////////////////////////////////////////////////////////////////////////////////////
     #[structopt(long = "features", default_value = "")]
     /// Name of delta features to use (space-separated). A feature is a named collection of delta
     /// options in ~/.gitconfig. See FEATURES section.
@@ -206,24 +285,6 @@ pub struct Opt {
     /// from the BAT_THEME environment variable, if that contains a valid theme name.
     /// --syntax-theme=none disables all syntax highlighting.
     pub syntax_theme: Option<String>,
-
-    /// Use default colors appropriate for a light terminal background. For more control, see the
-    /// style options.
-    #[structopt(long = "light")]
-    pub light: bool,
-
-    /// Use default colors appropriate for a dark terminal background. For more control, see the
-    /// style options.
-    #[structopt(long = "dark")]
-    pub dark: bool,
-
-    #[structopt(long = "diff-highlight")]
-    /// Emulate diff-highlight (https://github.com/git/git/tree/master/contrib/diff-highlight)
-    pub diff_highlight: bool,
-
-    #[structopt(long = "diff-so-fancy")]
-    /// Emulate diff-so-fancy (https://github.com/so-fancy/diff-so-fancy)
-    pub diff_so_fancy: bool,
 
     #[structopt(long = "minus-style", default_value = "normal auto")]
     /// Style (foreground, background, attributes) for removed lines. See STYLES section.
@@ -259,58 +320,48 @@ pub struct Opt {
 
     #[structopt(long = "commit-style", default_value = "raw")]
     /// Style (foreground, background, attributes) for the commit hash line. See STYLES section.
+    /// The style 'omit' can be used to remove the commit hash line from the output.
     pub commit_style: String,
 
     #[structopt(long = "commit-decoration-style", default_value = "")]
     /// Style (foreground, background, attributes) for the commit hash decoration. See STYLES
-    /// section. One of the special attributes 'box', 'ul', 'overline', or 'underoverline' must be
-    /// given.
+    /// section. The style string should contain one of the special attributes 'box', 'ul'
+    /// (underline), 'ol' (overline), or the combination 'ul ol'.
     pub commit_decoration_style: String,
 
     #[structopt(long = "file-style", default_value = "blue")]
-    /// Style (foreground, background, attributes) for the file section. See STYLES section.
+    /// Style (foreground, background, attributes) for the file section. See STYLES section. The
+    /// style 'omit' can be used to remove the file section from the output.
     pub file_style: String,
 
     #[structopt(long = "file-decoration-style", default_value = "blue ul")]
-    /// Style (foreground, background, attributes) for the file decoration. See STYLES section. One
-    /// of the special attributes 'box', 'ul', 'overline', or 'underoverline' must be given.
+    /// Style (foreground, background, attributes) for the file decoration. See STYLES section. The
+    /// style string should contain one of the special attributes 'box', 'ul' (underline), 'ol'
+    /// (overline), or the combination 'ul ol'.
     pub file_decoration_style: String,
 
-    #[structopt(long = "navigate")]
-    /// Activate diff navigation: use n to jump forwards and N to jump backwards. To change the
-    /// file labels used see --file-modified-label, --file-removed-label, --file-added-label,
-    /// --file-renamed-label.
-    pub navigate: bool,
-
-    #[structopt(long = "file-modified-label", default_value = "")]
-    /// Text to display in front of a modified file path.
-    pub file_modified_label: String,
-
-    #[structopt(long = "file-removed-label", default_value = "removed:")]
-    /// Text to display in front of a removed file path.
-    pub file_removed_label: String,
-
-    #[structopt(long = "file-added-label", default_value = "added:")]
-    /// Text to display in front of a added file path.
-    pub file_added_label: String,
-
-    #[structopt(long = "file-renamed-label", default_value = "renamed:")]
-    /// Text to display in front of a renamed file path.
-    pub file_renamed_label: String,
-
     #[structopt(long = "hunk-header-style", default_value = "syntax")]
-    /// Style (foreground, background, attributes) for the hunk-header. See STYLES section.
+    /// Style (foreground, background, attributes) for the hunk-header. See STYLES section. The
+    /// style 'omit' can be used to remove the hunk header section from the output.
     pub hunk_header_style: String,
 
     #[structopt(long = "hunk-header-decoration-style", default_value = "blue box")]
     /// Style (foreground, background, attributes) for the hunk-header decoration. See STYLES
-    /// section. One of the special attributes 'box', 'ul', 'overline', or 'underoverline' must be
-    /// given.
+    /// section. The style string should contain one of the special attributes 'box', 'ul'
+    /// (underline), 'ol' (overline), or the combination 'ul ol'.
     pub hunk_header_decoration_style: String,
 
-    /// Display line numbers next to the diff. See LINE NUMBERS section.
-    #[structopt(short = "n", long = "line-numbers")]
-    pub line_numbers: bool,
+    /// The regular expression used to decide what a word is for the within-line highlight
+    /// algorithm. For less fine-grained matching than the default try --word-diff-regex="\S+"
+    /// --max-line-distance=1.0 (this is more similar to `git --word-diff`).
+    #[structopt(long = "word-diff-regex", default_value = r"\w+")]
+    pub tokenization_regex: String,
+
+    /// The maximum distance between two lines for them to be inferred to be homologous. Homologous
+    /// line pairs are highlighted according to the deletion and insertion operations transforming
+    /// one into the other.
+    #[structopt(long = "max-line-distance", default_value = "0.6")]
+    pub max_line_distance: f64,
 
     /// Style (foreground, background, attributes) for line numbers in the old (minus) version of
     /// the file. See STYLES and LINE NUMBERS sections.
@@ -328,15 +379,17 @@ pub struct Opt {
     pub line_numbers_plus_style: String,
 
     /// Format string for the left column of line numbers. A typical value would be "{nm:^4}⋮"
-    /// which means to display the line numbers of the minus file (old version), followed by a
-    /// dividing character. See the LINE NUMBERS section.
+    /// which means to display the line numbers of the minus file (old version), center-aligned,
+    /// padded to a width of 4 characters, followed by a dividing character. See the LINE NUMBERS
+    /// section.
     #[structopt(long = "line-numbers-left-format", default_value = "{nm:^4}⋮")]
     pub line_numbers_left_format: String,
 
     /// Format string for the right column of line numbers. A typical value would be "{np:^4}│ "
-    /// which means to display the line numbers of the plus file (new version), followed by a
-    /// dividing character, and a space. See the LINE NUMBERS section.
-    #[structopt(long = "line-numbers-right-format", default_value = "{np:^4}│ ")]
+    /// which means to display the line numbers of the plus file (new version), center-aligned,
+    /// padded to a width of 4 characters, followed by a dividing character, and a space. See the
+    /// LINE NUMBERS section.
+    #[structopt(long = "line-numbers-right-format", default_value = "{np:^4}│")]
     pub line_numbers_right_format: String,
 
     /// Style (foreground, background, attributes) for the left column of line numbers. See STYLES
@@ -349,24 +402,21 @@ pub struct Opt {
     #[structopt(long = "line-numbers-right-style", default_value = "auto")]
     pub line_numbers_right_style: String,
 
-    #[structopt(long = "raw")]
-    /// Do not alter the input in any way. The only exceptions are the coloring of hunk lines:
-    /// minus lines use color.diff.old (with fallback to "red") and plus lines use color.diff.new
-    /// (with fallback to "green").
-    pub raw: bool,
+    #[structopt(long = "file-modified-label", default_value = "")]
+    /// Text to display in front of a modified file path.
+    pub file_modified_label: String,
 
-    #[structopt(long = "color-only")]
-    /// Do not alter the input in any way except for coloring hunk lines.
-    pub color_only: bool,
+    #[structopt(long = "file-removed-label", default_value = "removed:")]
+    /// Text to display in front of a removed file path.
+    pub file_removed_label: String,
 
-    #[structopt(long = "no-gitconfig")]
-    /// Do not take settings from git config files. See GIT CONFIG section.
-    pub no_gitconfig: bool,
+    #[structopt(long = "file-added-label", default_value = "added:")]
+    /// Text to display in front of a added file path.
+    pub file_added_label: String,
 
-    #[structopt(long = "keep-plus-minus-markers")]
-    /// Prefix added/removed lines with a +/- character, respectively, exactly as git does. The
-    /// default behavior is to output a space character in place of these markers.
-    pub keep_plus_minus_markers: bool,
+    #[structopt(long = "file-renamed-label", default_value = "renamed:")]
+    /// Text to display in front of a renamed file path.
+    pub file_renamed_label: String,
 
     /// The width of underline/overline decorations. Use --width=variable to extend decorations and
     /// background colors to the end of the text only. Otherwise background colors extend to the
@@ -381,41 +431,8 @@ pub struct Opt {
     #[structopt(long = "tabs", default_value = "4")]
     pub tab_width: usize,
 
-    /// Display the active values for all Delta options. Style options are displayed with
-    /// foreground and background colors. This can be used to experiment with colors by combining
-    /// this option with other options such as --minus-style, --zero-style, --plus-style, --light,
-    /// --dark, etc.
-    #[structopt(long = "show-config")]
-    pub show_config: bool,
-
-    /// List supported languages and associated file extensions.
-    #[structopt(long = "list-languages")]
-    pub list_languages: bool,
-
-    /// List available syntax-highlighting color themes.
-    #[structopt(long = "list-syntax-themes")]
-    pub list_syntax_themes: bool,
-
-    /// Show all available syntax-highlighting themes, each with an example of highlighted diff output.
-    /// If diff output is supplied on standard input then this will be used for the demo. For
-    /// example: `git show --color=always | delta --show-syntax-themes`.
-    #[structopt(long = "show-syntax-themes")]
-    pub show_syntax_themes: bool,
-
-    /// The regular expression used to decide what a word is for the within-line highlight
-    /// algorithm. For less fine-grained matching than the default try --word-diff-regex="\S+"
-    /// --max-line-distance=1.0 (this is more similar to `git --word-diff`).
-    #[structopt(long = "word-diff-regex", default_value = r"\w+")]
-    pub tokenization_regex: String,
-
-    /// The maximum distance between two lines for them to be inferred to be homologous. Homologous
-    /// line pairs are highlighted according to the deletion and insertion operations transforming
-    /// one into the other.
-    #[structopt(long = "max-line-distance", default_value = "0.6")]
-    pub max_line_distance: f64,
-
     /// Whether to emit 24-bit ("true color") RGB color codes. Options are auto, always, and never.
-    /// "auto" means that delta will emit 24-bit color codes iff the environment variable COLORTERM
+    /// "auto" means that delta will emit 24-bit color codes if the environment variable COLORTERM
     /// has the value "truecolor" or "24bit". If your terminal application (the application you use
     /// to enter commands at a shell prompt) supports 24 bit colors, then it probably already sets
     /// this environment variable, in which case you don't need to do anything.
@@ -428,7 +445,8 @@ pub struct Opt {
     #[structopt(long = "paging", default_value = "auto")]
     pub paging_mode: String,
 
-    /// First file to be compared when delta is being used in diff mode.
+    /// First file to be compared when delta is being used in diff mode: `delta file_1 file_2` is
+    /// equivalent to `diff -u file_1 file_2 | delta`.
     #[structopt(parse(from_os_str))]
     pub minus_file: Option<PathBuf>,
 
@@ -496,11 +514,48 @@ pub struct Opt {
     #[structopt(long = "theme")]
     /// Deprecated: use --syntax-theme.
     pub deprecated_theme: Option<String>,
+
+    #[structopt(skip)]
+    pub computed: ComputedValues,
+}
+
+#[derive(Default, Clone, Debug)]
+pub struct ComputedValues {
+    pub is_light_mode: bool,
+    pub syntax_set: SyntaxSet,
+    pub syntax_theme: Option<SyntaxTheme>,
+    pub syntax_dummy_theme: SyntaxTheme,
+    pub true_color: bool,
+    pub available_terminal_width: usize,
+    pub decorations_width: Width,
+    pub background_color_extends_to_terminal_width: bool,
+    pub paging_mode: PagingMode,
+}
+
+#[derive(Clone, Debug)]
+pub enum Width {
+    Fixed(usize),
+    Variable,
+}
+
+impl Default for Width {
+    fn default() -> Self {
+        Width::Variable
+    }
+}
+
+impl Default for PagingMode {
+    fn default() -> Self {
+        PagingMode::Never
+    }
 }
 
 impl Opt {
-    pub fn from_args_and_git_config(git_config: &mut Option<GitConfig>) -> Self {
-        Self::from_clap_and_git_config(Self::clap().get_matches(), git_config)
+    pub fn from_args_and_git_config(
+        git_config: &mut Option<GitConfig>,
+        assets: HighlightingAssets,
+    ) -> Self {
+        Self::from_clap_and_git_config(Self::clap().get_matches(), git_config, assets)
     }
 
     #[cfg(test)]
@@ -509,26 +564,37 @@ impl Opt {
         I: IntoIterator,
         I::Item: Into<OsString> + Clone,
     {
-        Self::from_clap_and_git_config(Self::clap().get_matches_from(iter), git_config)
+        let assets = HighlightingAssets::new();
+        Self::from_clap_and_git_config(Self::clap().get_matches_from(iter), git_config, assets)
     }
 
     fn from_clap_and_git_config(
         arg_matches: clap::ArgMatches,
         git_config: &mut Option<GitConfig>,
+        assets: HighlightingAssets,
     ) -> Self {
         let mut opt = Opt::from_clap(&arg_matches);
-        set_options::set_options(&mut opt, git_config, &arg_matches);
-        rewrite_options::apply_rewrite_rules(&mut opt, &arg_matches);
+        options::rewrite::apply_rewrite_rules(&mut opt, &arg_matches);
+        options::set::set_options(&mut opt, git_config, &arg_matches, assets);
         opt
     }
 
-    pub fn get_option_or_flag_names<'a>() -> HashSet<&'a str> {
-        let names: HashSet<&str> = itertools::chain(
-            Self::clap().p.opts.iter().filter_map(|opt| opt.s.long),
-            Self::clap().p.flags.iter().filter_map(|opt| opt.s.long),
+    #[allow(dead_code)]
+    pub fn get_option_names<'a>() -> HashMap<&'a str, &'a str> {
+        itertools::chain(
+            Self::clap()
+                .p
+                .opts
+                .iter()
+                .map(|opt| (opt.b.name, opt.s.long.unwrap())),
+            Self::clap()
+                .p
+                .flags
+                .iter()
+                .map(|opt| (opt.b.name, opt.s.long.unwrap())),
         )
-        .collect();
-        &names - &*IGNORED_OPTION_OR_FLAG_NAMES
+        .filter(|(name, _)| !IGNORED_OPTION_NAMES.contains(name))
+        .collect()
     }
 }
 
@@ -536,21 +602,21 @@ impl Opt {
 // (1) Deprecated options
 // (2) Pseudo-flag commands such as --list-languages
 lazy_static! {
-    static ref IGNORED_OPTION_OR_FLAG_NAMES: HashSet<&'static str> = vec![
-        "commit-color",
-        "file-color",
-        "highlight-removed",
-        "hunk-color",
-        "hunk-style",
+    static ref IGNORED_OPTION_NAMES: HashSet<&'static str> = vec![
+        "deprecated-file-color",
+        "deprecated-hunk-style",
+        "deprecated-minus-background-color",
+        "deprecated-minus-emph-background-color",
+        "deprecated-hunk-color",
+        "deprecated-plus-emph-background-color",
+        "deprecated-plus-background-color",
+        "deprecated-highlight-minus-lines",
+        "deprecated-theme",
+        "deprecated-commit-color",
         "list-languages",
         "list-syntax-themes",
-        "minus-color",
-        "minus-emph-color",
-        "plus-color",
-        "plus-emph-color",
         "show-config",
         "show-syntax-themes",
-        "theme",
     ]
     .into_iter()
     .collect();

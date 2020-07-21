@@ -3,14 +3,17 @@ use regex::Regex;
 use std::io::Write;
 
 use ansi_term;
+use itertools::Itertools;
 use syntect::easy::HighlightLines;
 use syntect::highlighting::Style as SyntectStyle;
 use syntect::parsing::{SyntaxReference, SyntaxSet};
+use unicode_segmentation::UnicodeSegmentation;
 
-use crate::config;
+use crate::config::{self, delta_unreachable};
 use crate::delta::State;
 use crate::edits;
 use crate::features::line_numbers;
+use crate::features::side_by_side;
 use crate::paint::superimpose_style_sections::superimpose_style_sections;
 use crate::style::Style;
 
@@ -26,8 +29,7 @@ pub struct Painter<'a> {
     pub highlighter: HighlightLines<'a>,
     pub config: &'a config::Config,
     pub output_buffer: String,
-    pub minus_line_number: usize,
-    pub plus_line_number: usize,
+    pub line_numbers_data: line_numbers::LineNumbersData<'a>,
 }
 
 impl<'a> Painter<'a> {
@@ -35,6 +37,15 @@ impl<'a> Painter<'a> {
         let default_syntax = Self::get_syntax(&config.syntax_set, None);
         // TODO: Avoid doing this.
         let dummy_highlighter = HighlightLines::new(default_syntax, &config.syntax_dummy_theme);
+
+        let line_numbers_data = if config.line_numbers {
+            line_numbers::LineNumbersData::from_format_strings(
+                &config.line_numbers_left_format,
+                &config.line_numbers_right_format,
+            )
+        } else {
+            line_numbers::LineNumbersData::default()
+        };
         Self {
             minus_lines: Vec::new(),
             plus_lines: Vec::new(),
@@ -43,8 +54,7 @@ impl<'a> Painter<'a> {
             highlighter: dummy_highlighter,
             writer,
             config,
-            minus_line_number: 0,
-            plus_line_number: 0,
+            line_numbers_data,
         }
     }
 
@@ -53,9 +63,16 @@ impl<'a> Painter<'a> {
     }
 
     fn get_syntax(syntax_set: &'a SyntaxSet, extension: Option<&str>) -> &'a SyntaxReference {
-        syntax_set
-            .find_syntax_by_extension(extension.unwrap_or("txt"))
-            .unwrap_or_else(|| Painter::get_syntax(syntax_set, Some("txt")))
+        if let Some(extension) = extension {
+            if let Some(syntax) = syntax_set.find_syntax_by_extension(extension) {
+                return syntax;
+            }
+        }
+        return syntax_set
+            .find_syntax_by_extension("txt")
+            .unwrap_or_else(|| {
+                delta_unreachable("Failed to find any language syntax definitions.")
+            });
     }
 
     pub fn set_highlighter(&mut self) {
@@ -64,7 +81,45 @@ impl<'a> Painter<'a> {
         };
     }
 
-    pub fn paint_buffered_lines(&mut self) {
+    /// Replace initial -/+ character with ' ', expand tabs as spaces, and optionally terminate with
+    /// newline.
+    // Terminating with newline character is necessary for many of the sublime syntax definitions to
+    // highlight correctly.
+    // See https://docs.rs/syntect/3.2.0/syntect/parsing/struct.SyntaxSetBuilder.html#method.add_from_folder
+    pub fn prepare(&self, line: &str, append_newline: bool) -> String {
+        let terminator = if append_newline { "\n" } else { "" };
+        if !line.is_empty() {
+            let mut line = line.graphemes(true);
+
+            // The first column contains a -/+/space character, added by git. We substitute it for a
+            // space now, so that it is not present during syntax highlighting. When emitting the line
+            // in Painter::paint_lines, we drop the space (unless --keep-plus-minus-markers is in
+            // effect in which case we replace it with the appropriate marker).
+            // TODO: Things should, but do not, work if this leading space is omitted at this stage.
+            // See comment in align::Alignment::new.
+            line.next();
+            format!(" {}{}", self.expand_tabs(line), terminator)
+        } else {
+            terminator.to_string()
+        }
+    }
+
+    /// Expand tabs as spaces.
+    /// tab_width = 0 is documented to mean do not replace tabs.
+    pub fn expand_tabs<'b, I>(&self, line: I) -> String
+    where
+        I: Iterator<Item = &'b str>,
+    {
+        if self.config.tab_width > 0 {
+            let tab_replacement = " ".repeat(self.config.tab_width);
+            line.map(|s| if s == "\t" { &tab_replacement } else { s })
+                .collect::<String>()
+        } else {
+            line.collect::<String>()
+        }
+    }
+
+    pub fn paint_buffered_minus_and_plus_lines(&mut self) {
         let minus_line_syntax_style_sections = Self::get_syntax_style_sections_for_lines(
             &self.minus_lines,
             &State::HunkMinus,
@@ -77,58 +132,100 @@ impl<'a> Painter<'a> {
             &mut self.highlighter,
             self.config,
         );
-        let (minus_line_diff_style_sections, plus_line_diff_style_sections) =
+        let (minus_line_diff_style_sections, plus_line_diff_style_sections, line_alignment) =
             Self::get_diff_style_sections(&self.minus_lines, &self.plus_lines, self.config);
 
-        let mut minus_line_numbers = Vec::new();
-        let mut plus_line_numbers = Vec::new();
-        for _line in &self.minus_lines {
-            minus_line_numbers.push(Some((Some(self.minus_line_number), None)));
-            self.minus_line_number += 1;
-        }
-        for _line in &self.plus_lines {
-            plus_line_numbers.push(Some((None, Some(self.plus_line_number))));
-            self.plus_line_number += 1;
-        }
-        // TODO: lines and style sections contain identical line text
-        if !self.minus_lines.is_empty() {
-            Painter::paint_lines(
+        if self.config.side_by_side {
+            side_by_side::paint_minus_and_plus_lines_side_by_side(
                 minus_line_syntax_style_sections,
                 minus_line_diff_style_sections,
-                minus_line_numbers,
-                &mut self.output_buffer,
-                self.config,
-                if self.config.keep_plus_minus_markers {
-                    "-"
-                } else {
-                    ""
-                },
-                self.config.minus_style,
-                self.config.minus_non_emph_style,
-                Some(self.config.minus_empty_line_marker_style),
-                None,
-            );
-        }
-        if !self.plus_lines.is_empty() {
-            Painter::paint_lines(
                 plus_line_syntax_style_sections,
                 plus_line_diff_style_sections,
-                plus_line_numbers,
+                line_alignment,
                 &mut self.output_buffer,
                 self.config,
-                if self.config.keep_plus_minus_markers {
-                    "+"
-                } else {
-                    ""
-                },
-                self.config.plus_style,
-                self.config.plus_non_emph_style,
-                Some(self.config.plus_empty_line_marker_style),
+                &mut Some(&mut self.line_numbers_data),
                 None,
             );
+        } else {
+            if !self.minus_lines.is_empty() {
+                Painter::paint_lines(
+                    minus_line_syntax_style_sections,
+                    minus_line_diff_style_sections,
+                    &State::HunkMinus,
+                    &mut self.output_buffer,
+                    self.config,
+                    &mut Some(&mut self.line_numbers_data),
+                    if self.config.keep_plus_minus_markers {
+                        "-"
+                    } else {
+                        ""
+                    },
+                    Some(self.config.minus_empty_line_marker_style),
+                    None,
+                );
+            }
+            if !self.plus_lines.is_empty() {
+                Painter::paint_lines(
+                    plus_line_syntax_style_sections,
+                    plus_line_diff_style_sections,
+                    &State::HunkPlus,
+                    &mut self.output_buffer,
+                    self.config,
+                    &mut Some(&mut self.line_numbers_data),
+                    if self.config.keep_plus_minus_markers {
+                        "+"
+                    } else {
+                        ""
+                    },
+                    Some(self.config.plus_empty_line_marker_style),
+                    None,
+                );
+            }
         }
         self.minus_lines.clear();
         self.plus_lines.clear();
+    }
+
+    pub fn paint_zero_line(&mut self, line: &str) {
+        let prefix = if self.config.keep_plus_minus_markers && !line.is_empty() {
+            &line[..1]
+        } else {
+            ""
+        };
+        let lines = vec![self.prepare(line, true)];
+        let syntax_style_sections = Painter::get_syntax_style_sections_for_lines(
+            &lines,
+            &State::HunkZero,
+            &mut self.highlighter,
+            &self.config,
+        );
+        let diff_style_sections = vec![(self.config.zero_style, lines[0].as_str())];
+
+        if self.config.side_by_side {
+            side_by_side::paint_zero_lines_side_by_side(
+                syntax_style_sections,
+                vec![diff_style_sections],
+                &State::HunkZero,
+                &mut self.output_buffer,
+                self.config,
+                &mut Some(&mut self.line_numbers_data),
+                prefix,
+                None,
+            );
+        } else {
+            Painter::paint_lines(
+                syntax_style_sections,
+                vec![diff_style_sections],
+                &State::HunkZero,
+                &mut self.output_buffer,
+                self.config,
+                &mut Some(&mut self.line_numbers_data),
+                prefix,
+                None,
+                None,
+            );
+        }
     }
 
     /// Superimpose background styles and foreground syntax
@@ -136,12 +233,11 @@ impl<'a> Painter<'a> {
     pub fn paint_lines(
         syntax_style_sections: Vec<Vec<(SyntectStyle, &str)>>,
         diff_style_sections: Vec<Vec<(Style, &str)>>,
-        line_number_sections: Vec<Option<(Option<usize>, Option<usize>)>>,
+        state: &State,
         output_buffer: &mut String,
         config: &config::Config,
+        line_numbers_data: &mut Option<&mut line_numbers::LineNumbersData>,
         prefix: &str,
-        style: Style,          // style for right fill if line contains no emph sections
-        non_emph_style: Style, // style for right fill if line contains emph sections
         empty_line_style: Option<Style>, // a style with background color to highlight an empty line
         background_color_extends_to_terminal_width: Option<bool>,
     ) {
@@ -153,77 +249,139 @@ impl<'a> Painter<'a> {
         // 2. We must ensure that we fill rightwards with the appropriate
         //    non-emph background color. In that case we don't use the last
         //    style of the line, because this might be emph.
-
-        for ((syntax_sections, diff_sections), line_numbers) in syntax_style_sections
+        for (syntax_sections, diff_sections) in syntax_style_sections
             .iter()
-            .zip(diff_style_sections.iter())
-            .zip(line_number_sections.iter())
+            .zip_eq(diff_style_sections.iter())
         {
-            let non_emph_style = if style_sections_contain_more_than_one_style(diff_sections) {
-                non_emph_style // line contains an emph section
-            } else {
-                style
-            };
-
-            let mut handled_prefix = false;
-            let mut ansi_strings = Vec::new();
-            if config.line_numbers && line_numbers.is_some() {
-                ansi_strings.extend(line_numbers::format_and_paint_line_numbers(
-                    line_numbers,
-                    config,
-                ))
-            }
-            for (section_style, mut text) in superimpose_style_sections(
+            let (mut line, line_is_empty) = Painter::paint_line(
                 syntax_sections,
                 diff_sections,
-                config.true_color,
-                config.null_syntect_style,
-            ) {
-                if !handled_prefix {
-                    if prefix != "" {
-                        ansi_strings.push(section_style.paint(prefix));
-                    }
-                    if text.len() > 0 {
-                        text.remove(0);
-                    }
-                    handled_prefix = true;
-                }
-                if !text.is_empty() {
-                    ansi_strings.push(section_style.paint(text));
-                }
-            }
-            let right_fill_background_color = non_emph_style.has_background_color()
-                && background_color_extends_to_terminal_width
-                    .unwrap_or(config.background_color_extends_to_terminal_width);
-            if right_fill_background_color {
-                ansi_strings.push(non_emph_style.paint(""));
-            }
-            let line = &mut ansi_term::ANSIStrings(&ansi_strings).to_string();
-            if right_fill_background_color {
-                // HACK: How to properly incorporate the ANSI_CSI_CLEAR_TO_EOL into ansi_strings?
-                if line
-                    .to_lowercase()
-                    .ends_with(&ANSI_SGR_RESET.to_lowercase())
-                {
-                    line.truncate(line.len() - ANSI_SGR_RESET.len());
-                }
-                output_buffer.push_str(&line);
-                output_buffer.push_str(ANSI_CSI_CLEAR_TO_EOL);
-                output_buffer.push_str(ANSI_SGR_RESET);
-            } else if line.is_empty() {
+                state,
+                line_numbers_data,
+                None,
+                prefix,
+                config,
+            );
+            let (should_right_fill_background_color, fill_style) =
+                Painter::get_should_right_fill_background_color_and_fill_style(
+                    diff_sections,
+                    state,
+                    background_color_extends_to_terminal_width,
+                    config,
+                );
+            if should_right_fill_background_color {
+                Painter::right_fill_background_color(&mut line, fill_style);
+            } else if line_is_empty {
                 if let Some(empty_line_style) = empty_line_style {
-                    output_buffer.push_str(
-                        &empty_line_style
-                            .ansi_term_style
-                            .paint(ANSI_CSI_CLEAR_TO_BOL)
-                            .to_string(),
+                    Painter::mark_empty_line(
+                        &empty_line_style,
+                        &mut line,
+                        if config.line_numbers { Some(" ") } else { None },
                     );
                 }
-            } else {
-                output_buffer.push_str(&line);
-            }
+            };
+            output_buffer.push_str(&line);
             output_buffer.push_str("\n");
         }
+    }
+
+    /// Determine whether the terminal should fill the line rightwards with a background color, and
+    /// the style for doing so.
+    pub fn get_should_right_fill_background_color_and_fill_style(
+        diff_sections: &Vec<(Style, &str)>,
+        state: &State,
+        background_color_extends_to_terminal_width: Option<bool>,
+        config: &config::Config,
+    ) -> (bool, Style) {
+        // style:          for right fill if line contains no emph sections
+        // non_emph_style: for right fill if line contains emph sections
+        let (style, non_emph_style) = match state {
+            State::HunkMinus => (config.minus_style, config.minus_non_emph_style),
+            State::HunkZero => (config.zero_style, config.zero_style),
+            State::HunkPlus => (config.plus_style, config.plus_non_emph_style),
+            _ => (config.null_style, config.null_style),
+        };
+        let fill_style = if style_sections_contain_more_than_one_style(diff_sections) {
+            non_emph_style // line contains an emph section
+        } else {
+            style
+        };
+        let should_right_fill_background_color = fill_style.get_background_color().is_some()
+            && background_color_extends_to_terminal_width
+                .unwrap_or(config.background_color_extends_to_terminal_width);
+        (should_right_fill_background_color, fill_style)
+    }
+
+    /// Emit line with ANSI sequences that extend the background color to the terminal width.
+    pub fn right_fill_background_color(line: &mut String, fill_style: Style) {
+        // HACK: How to properly incorporate the ANSI_CSI_CLEAR_TO_EOL into ansi_strings?
+        line.push_str(&ansi_term::ANSIStrings(&[fill_style.paint("")]).to_string());
+        if line
+            .to_lowercase()
+            .ends_with(&ANSI_SGR_RESET.to_lowercase())
+        {
+            line.truncate(line.len() - ANSI_SGR_RESET.len());
+        }
+        line.push_str(ANSI_CSI_CLEAR_TO_EOL);
+        line.push_str(ANSI_SGR_RESET);
+    }
+
+    /// Use ANSI sequences to visually mark the current line as empty. If `marker` is None then the
+    /// line is marked using terminal emulator colors only, i.e. without appending any marker text
+    /// to the line. This is typically appropriate only when the `line` buffer is empty, since
+    /// otherwise the ANSI_CSI_CLEAR_TO_BOL instruction would overwrite the text to the left of the
+    /// current buffer position.
+    pub fn mark_empty_line(empty_line_style: &Style, line: &mut String, marker: Option<&str>) {
+        line.push_str(
+            &empty_line_style
+                .paint(marker.unwrap_or(ANSI_CSI_CLEAR_TO_BOL))
+                .to_string(),
+        );
+    }
+
+    /// Return painted line (maybe prefixed with line numbers field) and an is_empty? boolean.
+    pub fn paint_line(
+        syntax_sections: &Vec<(SyntectStyle, &str)>,
+        diff_sections: &Vec<(Style, &str)>,
+        state: &State,
+        line_numbers_data: &mut Option<&mut line_numbers::LineNumbersData>,
+        side_by_side_panel: Option<side_by_side::PanelSide>,
+        prefix: &str,
+        config: &config::Config,
+    ) -> (String, bool) {
+        let output_line_numbers = config.line_numbers && line_numbers_data.is_some();
+        let mut handled_prefix = false;
+        let mut ansi_strings = Vec::new();
+        if output_line_numbers {
+            ansi_strings.extend(line_numbers::format_and_paint_line_numbers(
+                line_numbers_data.as_mut().unwrap(),
+                state,
+                side_by_side_panel,
+                config,
+            ))
+        }
+        let mut is_empty = true;
+        for (section_style, mut text) in superimpose_style_sections(
+            syntax_sections,
+            diff_sections,
+            config.true_color,
+            config.null_syntect_style,
+        ) {
+            if !handled_prefix {
+                if prefix != "" {
+                    ansi_strings.push(section_style.paint(prefix));
+                }
+                if text.len() > 0 {
+                    text.remove(0);
+                }
+                handled_prefix = true;
+            }
+            if !text.is_empty() {
+                ansi_strings.push(section_style.paint(text));
+                is_empty = false;
+            }
+        }
+        (ansi_term::ANSIStrings(&ansi_strings).to_string(), is_empty)
     }
 
     /// Write output buffer to output stream, and clear the buffer.
@@ -278,7 +436,11 @@ impl<'a> Painter<'a> {
         minus_lines: &'b Vec<String>,
         plus_lines: &'b Vec<String>,
         config: &config::Config,
-    ) -> (Vec<Vec<(Style, &'b str)>>, Vec<Vec<(Style, &'b str)>>) {
+    ) -> (
+        Vec<Vec<(Style, &'b str)>>,
+        Vec<Vec<(Style, &'b str)>>,
+        Vec<(Option<usize>, Option<usize>)>,
+    ) {
         let mut diff_sections = edits::infer_edits(
             minus_lines,
             plus_lines,

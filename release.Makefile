@@ -1,3 +1,7 @@
+# TODO:
+# - Update binary assets from bat
+# - Update README prior to release
+
 release: \
 	clean \
 	check_environment \
@@ -28,7 +32,7 @@ $(BUMP_VERSION_SENTINEL):
 	make build
 	make test
 	git add Cargo.toml Cargo.lock
-	git commit -m "Bump version"
+	git commit -m "Bump version" || true
 	touch $(BUMP_VERSION_SENTINEL)
 
 
@@ -52,7 +56,6 @@ $(BUMP_VERSION_IN_DOCUMENTATION_LINKS_SENTINEL):
 	sed -i -E "s,$$DELTA_OLD_VERSION,$$DELTA_NEW_VERSION,g" README.md
 	git add README.md
 	git commit -m "Bump version in links to executables"
-	git push
 	touch $(BUMP_VERSION_IN_DOCUMENTATION_LINKS_SENTINEL)
 
 

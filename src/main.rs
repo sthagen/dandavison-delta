@@ -13,16 +13,12 @@ mod draw;
 mod edits;
 mod env;
 mod features;
-mod get_option_value;
 mod git_config;
-mod option_value;
+mod options;
 mod paint;
 mod parse;
 mod parse_style;
-mod rewrite_options;
-mod set_options;
 mod style;
-mod syntax_theme;
 mod syntect_color;
 mod tests;
 
@@ -33,11 +29,13 @@ use std::process;
 use ansi_term;
 use atty;
 use bytelines::ByteLinesReader;
+use itertools::Itertools;
 use structopt::StructOpt;
 
 use crate::bat::assets::{list_languages, HighlightingAssets};
 use crate::bat::output::{OutputType, PagingMode};
 use crate::delta::delta;
+use crate::options::theme::is_light_syntax_theme;
 
 mod errors {
     error_chain! {
@@ -50,7 +48,8 @@ mod errors {
 }
 
 fn main() -> std::io::Result<()> {
-    let opt = cli::Opt::from_args_and_git_config(&mut git_config::GitConfig::try_create());
+    let assets = HighlightingAssets::new();
+    let opt = cli::Opt::from_args_and_git_config(&mut git_config::GitConfig::try_create(), assets);
 
     if opt.list_languages {
         list_languages()?;
@@ -199,7 +198,11 @@ fn show_config(config: &config::Config) {
             PagingMode::Never => "never",
             PagingMode::QuitIfOneScreen => "auto",
         },
-        syntax_theme = config.syntax_theme_name,
+        syntax_theme = config
+            .syntax_theme
+            .clone()
+            .map(|t| t.name.unwrap_or("none".to_string()))
+            .unwrap_or("none".to_string()),
         tab_width = config.tab_width,
         tokenization_regex = format_option_value(&config.tokenization_regex.to_string()),
     );
@@ -224,9 +227,35 @@ where
 }
 
 fn show_syntax_themes() -> std::io::Result<()> {
+    let mut opt = cli::Opt::from_args();
+    let assets = HighlightingAssets::new();
+    let mut output_type = OutputType::from_mode(
+        PagingMode::QuitIfOneScreen,
+        None,
+        &config::Config::from(cli::Opt::default()),
+    )
+    .unwrap();
+    let mut writer = output_type.handle().unwrap();
+    opt.computed.syntax_set = assets.syntax_set;
+
+    if !(opt.dark || opt.light) {
+        _show_syntax_themes(opt.clone(), false, &mut writer)?;
+        _show_syntax_themes(opt, true, &mut writer)?;
+    } else if opt.light {
+        _show_syntax_themes(opt, true, &mut writer)?;
+    } else {
+        _show_syntax_themes(opt, false, &mut writer)?
+    };
+    Ok(())
+}
+
+fn _show_syntax_themes(
+    mut opt: cli::Opt,
+    is_light_mode: bool,
+    writer: &mut dyn Write,
+) -> std::io::Result<()> {
     use bytelines::ByteLines;
     use std::io::BufReader;
-    let opt = cli::Opt::from_args();
     let input = if !atty::is(atty::Stream::Stdin) {
         let mut buf = Vec::new();
         io::stdin().lock().read_to_end(&mut buf)?;
@@ -246,43 +275,25 @@ index f38589a..0f1bb83 100644
 +fn print_cube(num: f64) {
 +    let result = f64::powf(num, 3.0);
 +    println!(\"The cube of {:.2} is {:.2}.\", num, result);
- }"
+"
         .to_vec()
     };
 
-    let stdout = io::stdout();
-    let mut stdout = stdout.lock();
-    let style = ansi_term::Style::new().bold();
-
+    opt.computed.is_light_mode = is_light_mode;
+    let mut config = config::Config::from(opt);
+    let title_style = ansi_term::Style::new().bold();
     let assets = HighlightingAssets::new();
 
-    for (syntax_theme, _) in assets.theme_set.themes.iter() {
-        if opt.light && !syntax_theme::is_light_theme(syntax_theme)
-            || opt.dark && syntax_theme::is_light_theme(syntax_theme)
-        {
-            continue;
-        }
-
-        writeln!(stdout, "\n\nTheme: {}\n", style.paint(syntax_theme))?;
-
-        let opt_2 = cli::Opt::from_iter(&[
-            "--syntax-theme",
-            syntax_theme,
-            "--file-style",
-            "omit",
-            "--hunk-header-style",
-            "omit",
-        ]);
-        let config = config::Config::from(opt_2);
-        let mut output_type =
-            OutputType::from_mode(PagingMode::QuitIfOneScreen, None, &config).unwrap();
-        let mut writer = output_type.handle().unwrap();
-
-        if let Err(error) = delta(
-            ByteLines::new(BufReader::new(&input[0..])),
-            &mut writer,
-            &config,
-        ) {
+    for syntax_theme in assets
+        .theme_set
+        .themes
+        .iter()
+        .filter(|(t, _)| is_light_syntax_theme(t) == is_light_mode)
+        .map(|(t, _)| t)
+    {
+        writeln!(writer, "\n\nTheme: {}\n", title_style.paint(syntax_theme))?;
+        config.syntax_theme = Some(assets.theme_set.themes[syntax_theme.as_str()].clone());
+        if let Err(error) = delta(ByteLines::new(BufReader::new(&input[0..])), writer, &config) {
             match error.kind() {
                 ErrorKind::BrokenPipe => process::exit(0),
                 _ => eprintln!("{}", error),
@@ -293,22 +304,53 @@ index f38589a..0f1bb83 100644
 }
 
 pub fn list_syntax_themes() -> std::io::Result<()> {
+    if atty::is(atty::Stream::Stdout) {
+        return _list_syntax_themes_for_humans();
+    } else {
+        return _list_syntax_themes_for_machines();
+    }
+}
+
+pub fn _list_syntax_themes_for_humans() -> std::io::Result<()> {
     let assets = HighlightingAssets::new();
     let themes = &assets.theme_set.themes;
     let stdout = io::stdout();
     let mut stdout = stdout.lock();
 
     writeln!(stdout, "Light themes:")?;
-    for (theme, _) in themes.iter() {
-        if syntax_theme::is_light_theme(theme) {
-            writeln!(stdout, "    {}", theme)?;
-        }
+    for (theme, _) in themes.iter().filter(|(t, _)| is_light_syntax_theme(*t)) {
+        writeln!(stdout, "    {}", theme)?;
     }
-    writeln!(stdout, "Dark themes:")?;
-    for (theme, _) in themes.iter() {
-        if !syntax_theme::is_light_theme(theme) {
-            writeln!(stdout, "    {}", theme)?;
-        }
+    writeln!(stdout, "\nDark themes:")?;
+    for (theme, _) in themes.iter().filter(|(t, _)| !is_light_syntax_theme(*t)) {
+        writeln!(stdout, "    {}", theme)?;
+    }
+    writeln!(
+        stdout,
+        "\nUse delta --show-syntax-themes to demo the themes."
+    )?;
+    Ok(())
+}
+
+pub fn _list_syntax_themes_for_machines() -> std::io::Result<()> {
+    let assets = HighlightingAssets::new();
+    let themes = &assets.theme_set.themes;
+    let stdout = io::stdout();
+    let mut stdout = stdout.lock();
+    for (theme, _) in themes
+        .iter()
+        .sorted_by_key(|(t, _)| is_light_syntax_theme(*t))
+    {
+        writeln!(
+            stdout,
+            "{:5}\t{}",
+            if is_light_syntax_theme(theme) {
+                "light"
+            } else {
+                "dark"
+            },
+            theme
+        )?;
     }
     Ok(())
 }
