@@ -4,6 +4,7 @@ extern crate bitflags;
 extern crate error_chain;
 
 mod align;
+mod ansi;
 mod bat;
 mod cli;
 mod color;
@@ -13,7 +14,9 @@ mod draw;
 mod edits;
 mod env;
 mod features;
+mod format;
 mod git_config;
+mod git_config_entry;
 mod options;
 mod paint;
 mod parse;
@@ -37,7 +40,7 @@ use crate::bat::output::{OutputType, PagingMode};
 use crate::delta::delta;
 use crate::options::theme::is_light_syntax_theme;
 
-mod errors {
+pub mod errors {
     error_chain! {
         foreign_links {
             Io(::std::io::Error);
@@ -178,11 +181,13 @@ fn show_config(config: &config::Config) {
     file-modified-label           = {file_modified_label}
     file-removed-label            = {file_removed_label}
     file-renamed-label            = {file_renamed_label}
+    inspect-raw-lines             = {inspect_raw_lines}
     keep-plus-minus-markers       = {keep_plus_minus_markers}
     max-line-distance             = {max_line_distance}
     navigate                      = {navigate}
     paging                        = {paging_mode}
     syntax-theme                  = {syntax_theme}
+    width                         = {width}
     tabs                          = {tab_width}
     word-diff-regex               = {tokenization_regex}",
         true_color = config.true_color,
@@ -190,6 +195,10 @@ fn show_config(config: &config::Config) {
         file_modified_label = format_option_value(&config.file_modified_label),
         file_removed_label = format_option_value(&config.file_removed_label),
         file_renamed_label = format_option_value(&config.file_renamed_label),
+        inspect_raw_lines = match config.inspect_raw_lines {
+            cli::InspectRawLines::True => "true",
+            cli::InspectRawLines::False => "false",
+        },
         keep_plus_minus_markers = config.keep_plus_minus_markers,
         max_line_distance = config.max_line_distance,
         navigate = config.navigate,
@@ -203,6 +212,10 @@ fn show_config(config: &config::Config) {
             .clone()
             .map(|t| t.name.unwrap_or("none".to_string()))
             .unwrap_or("none".to_string()),
+        width = match config.decorations_width {
+            cli::Width::Fixed(width) => width.to_string(),
+            cli::Width::Variable => "variable".to_string(),
+        },
         tab_width = config.tab_width,
         tokenization_regex = format_option_value(&config.tokenization_regex.to_string()),
     );

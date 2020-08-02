@@ -1,5 +1,7 @@
 use std::collections::{HashMap, HashSet, VecDeque};
 use std::process;
+use std::result::Result;
+use std::str::FromStr;
 
 use console::Term;
 use structopt::clap;
@@ -9,8 +11,10 @@ use crate::bat::output::PagingMode;
 use crate::cli;
 use crate::config;
 use crate::env;
+use crate::errors::*;
 use crate::features;
 use crate::git_config;
+use crate::git_config_entry::{self, GitConfigEntry};
 use crate::options::option_value::{OptionValue, ProvenancedOptionValue};
 use crate::options::theme;
 
@@ -68,6 +72,7 @@ pub fn set_options(
         if opt.no_gitconfig {
             git_config.enabled = false;
         }
+        set_git_config_entries(opt, git_config);
     }
 
     let option_names = cli::Opt::get_option_names();
@@ -77,7 +82,7 @@ pub fn set_options(
     let features = gather_features(opt, &builtin_features, git_config);
     opt.features = features.join(" ");
 
-    set_widths(opt);
+    set_widths(opt, git_config, arg_matches, &option_names);
 
     // Set light, dark, and syntax-theme.
     set_true_color(opt);
@@ -123,6 +128,9 @@ pub fn set_options(
             file_style,
             hunk_header_decoration_style,
             hunk_header_style,
+            hyperlinks,
+            hyperlinks_file_link_format,
+            inspect_raw_lines,
             keep_plus_minus_markers,
             max_line_distance,
             // Hack: minus-style must come before minus-*emph-style because the latter default
@@ -165,6 +173,8 @@ pub fn set_options(
         true
     );
 
+    opt.computed.inspect_raw_lines =
+        cli::InspectRawLines::from_str(&opt.inspect_raw_lines).unwrap();
     opt.computed.paging_mode = parse_paging_mode(&opt.paging_mode);
 }
 
@@ -291,6 +301,9 @@ fn gather_features<'a>(
     }
     if opt.diff_so_fancy {
         gather_builtin_features_recursively("diff-so-fancy", &mut features, &builtin_features, opt);
+    }
+    if opt.hyperlinks {
+        gather_builtin_features_recursively("hyperlinks", &mut features, &builtin_features, opt);
     }
     if opt.line_numbers {
         gather_builtin_features_recursively("line-numbers", &mut features, &builtin_features, opt);
@@ -455,8 +468,25 @@ fn is_truecolor_terminal() -> bool {
         .unwrap_or(false)
 }
 
+impl FromStr for cli::InspectRawLines {
+    type Err = Error;
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        match s.to_lowercase().as_str() {
+            "true" => Ok(Self::True),
+            "false" => Ok(Self::False),
+            _ => {
+                eprintln!(
+                    r#"Invalid value for inspect-raw-lines option: {}. Valid values are "true", and "false"."#,
+                    s
+                );
+                process::exit(1);
+            }
+        }
+    }
+}
+
 fn parse_paging_mode(paging_mode_string: &str) -> PagingMode {
-    match paging_mode_string {
+    match paging_mode_string.to_lowercase().as_str() {
         "always" => PagingMode::Always,
         "never" => PagingMode::Never,
         "auto" => PagingMode::QuitIfOneScreen,
@@ -470,9 +500,28 @@ fn parse_paging_mode(paging_mode_string: &str) -> PagingMode {
     }
 }
 
-fn set_widths(opt: &mut cli::Opt) {
+fn set_widths(
+    opt: &mut cli::Opt,
+    git_config: &mut Option<git_config::GitConfig>,
+    arg_matches: &clap::ArgMatches,
+    option_names: &HashMap<&str, &str>,
+) {
     // Allow one character in case e.g. `less --status-column` is in effect. See #41 and #10.
     opt.computed.available_terminal_width = (Term::stdout().size().1 - 1) as usize;
+
+    let empty_builtin_features = HashMap::new();
+    if opt.width.is_none() {
+        set_options!(
+            [width],
+            opt,
+            &empty_builtin_features,
+            git_config,
+            arg_matches,
+            option_names,
+            false
+        );
+    }
+
     let (decorations_width, background_color_extends_to_terminal_width) = match opt.width.as_deref()
     {
         Some("variable") => (cli::Width::Variable, false),
@@ -493,11 +542,41 @@ fn set_widths(opt: &mut cli::Opt) {
         background_color_extends_to_terminal_width;
 }
 
+fn set_git_config_entries(opt: &mut cli::Opt, git_config: &mut git_config::GitConfig) {
+    // Styles
+    for key in &["color.diff.old", "color.diff.new"] {
+        if let Some(style_string) = git_config.get::<String>(key) {
+            opt.git_config_entries
+                .insert(key.to_string(), GitConfigEntry::Style(style_string));
+        }
+    }
+
+    // Strings
+    for key in &["remote.origin.url"] {
+        if let Some(string) = git_config.get::<String>(key) {
+            if let Ok(repo) = git_config_entry::GitRemoteRepo::from_str(&string) {
+                opt.git_config_entries
+                    .insert(key.to_string(), GitConfigEntry::GitRemote(repo));
+            }
+        }
+    }
+
+    if let Some(repo) = &git_config.repo {
+        if let Some(workdir) = repo.workdir() {
+            opt.git_config_entries.insert(
+                "delta.__workdir__".to_string(),
+                GitConfigEntry::Path(workdir.to_path_buf()),
+            );
+        }
+    }
+}
+
 #[cfg(test)]
 pub mod tests {
     use std::fs::remove_file;
 
     use crate::bat::output::PagingMode;
+    use crate::cli;
     use crate::tests::integration_test_utils::integration_test_utils;
 
     #[test]
@@ -607,6 +686,28 @@ pub mod tests {
         assert_eq!(opt.zero_style, "black black");
 
         assert_eq!(opt.computed.paging_mode, PagingMode::Never);
+
+        remove_file(git_config_path).unwrap();
+    }
+
+    #[test]
+    fn test_width_in_git_config_is_honored() {
+        let git_config_contents = b"
+[delta]
+    features = my-width-feature
+
+[delta \"my-width-feature\"]
+    width = variable
+";
+        let git_config_path = "delta__test_width_in_git_config_is_honored.gitconfig";
+
+        let opt = integration_test_utils::make_options_from_args_and_git_config(
+            &[],
+            Some(git_config_contents),
+            Some(git_config_path),
+        );
+
+        assert_eq!(opt.computed.decorations_width, cli::Width::Variable);
 
         remove_file(git_config_path).unwrap();
     }

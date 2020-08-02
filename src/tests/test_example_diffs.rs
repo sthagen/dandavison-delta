@@ -2,7 +2,7 @@
 mod tests {
     use console::strip_ansi_codes;
 
-    use crate::paint;
+    use crate::ansi;
     use crate::style;
     use crate::tests::ansi_test_utils::ansi_test_utils;
     use crate::tests::integration_test_utils::integration_test_utils;
@@ -1090,7 +1090,7 @@ impl<'a> Alignment<'a> { │
                 line,
                 &style
                     .ansi_term_style
-                    .paint(paint::ANSI_CSI_CLEAR_TO_EOL)
+                    .paint(ansi::ANSI_CSI_CLEAR_TO_EOL)
                     .to_string()
             );
         } else {
@@ -1099,7 +1099,7 @@ impl<'a> Alignment<'a> { │
                 line,
                 &style
                     .ansi_term_style
-                    .paint(paint::ANSI_CSI_CLEAR_TO_BOL)
+                    .paint(ansi::ANSI_CSI_CLEAR_TO_BOL)
                     .to_string()
             );
         }
@@ -1135,6 +1135,25 @@ impl<'a> Alignment<'a> { │
             "rs",
             &config,
         );
+    }
+
+    #[test]
+    fn test_git_diff_is_unchanged_under_color_only() {
+        let config = integration_test_utils::make_config_from_args(&["--color-only"]);
+        let input = DIFF_WITH_TWO_ADDED_LINES;
+        let output = integration_test_utils::run_delta(input, &config);
+        let output = strip_ansi_codes(&output);
+        assert_eq!(output, input);
+    }
+
+    #[test]
+    #[allow(non_snake_case)]
+    fn test_git_diff_U0_is_unchanged_under_color_only() {
+        let config = integration_test_utils::make_config_from_args(&["--color-only"]);
+        let input = DIFF_WITH_TWO_ADDED_LINES_CREATED_BY_GIT_DIFF_U0;
+        let output = integration_test_utils::run_delta(input, &config);
+        let output = strip_ansi_codes(&output);
+        assert_eq!(output, input);
     }
 
     const GIT_DIFF_SINGLE_HUNK: &str = "\
@@ -1617,4 +1636,31 @@ index 8d1c8b6..8b13789 100644
 - 
 +
 ";
+
+    const DIFF_WITH_TWO_ADDED_LINES: &str = r#"
+diff --git a/example.c b/example.c
+index 386f291a..22666f79 100644
+--- a/example.c
++++ b/example.c
+@@ -1,6 +1,8 @@
+ int other_routine() {
++    return 0;
+ }
+ 
+ int main() {
+     puts("Hello, world!");
++    return 0;
+ }
+"#;
+
+    const DIFF_WITH_TWO_ADDED_LINES_CREATED_BY_GIT_DIFF_U0: &str = r#"
+diff --git a/example.c b/example.c
+index 386f291a..22666f79 100644
+--- a/example.c
++++ b/example.c
+@@ -1,0 +2 @@ int other_routine() {
++    return 0;
+@@ -5,0 +7 @@ int main() {
++    return 0;
+"#;
 }

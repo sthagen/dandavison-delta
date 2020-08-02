@@ -1,3 +1,4 @@
+use std::borrow::Cow;
 use std::io::BufRead;
 use std::io::Write;
 
@@ -5,20 +6,23 @@ use bytelines::ByteLines;
 use console::strip_ansi_codes;
 use unicode_segmentation::UnicodeSegmentation;
 
+use crate::cli;
 use crate::config::Config;
 use crate::draw;
+use crate::features;
+use crate::format;
 use crate::paint::Painter;
 use crate::parse;
-use crate::style::DecorationStyle;
+use crate::style::{self, DecorationStyle};
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum State {
-    CommitMeta, // In commit metadata section
-    FileMeta,   // In diff metadata section, between (possible) commit metadata and first hunk
+    CommitMeta,                // In commit metadata section
+    FileMeta, // In diff metadata section, between (possible) commit metadata and first hunk
     HunkHeader, // In hunk metadata line
-    HunkZero,   // In hunk; unchanged line
-    HunkMinus,  // In hunk; removed line
-    HunkPlus,   // In hunk; added line
+    HunkZero, // In hunk; unchanged line
+    HunkMinus(Option<String>), // In hunk; removed line (raw_line)
+    HunkPlus(Option<String>), // In hunk; added line (raw_line)
     Unknown,
 }
 
@@ -32,7 +36,7 @@ pub enum Source {
 impl State {
     fn is_in_hunk(&self) -> bool {
         match *self {
-            State::HunkHeader | State::HunkZero | State::HunkMinus | State::HunkPlus => true,
+            State::HunkHeader | State::HunkZero | State::HunkMinus(_) | State::HunkPlus(_) => true,
             _ => false,
         }
     }
@@ -60,7 +64,7 @@ where
 {
     let mut painter = Painter::new(writer, config);
     let mut minus_file = "".to_string();
-    let mut plus_file;
+    let mut plus_file = "".to_string();
     let mut state = State::Unknown;
     let mut source = Source::Unknown;
 
@@ -111,11 +115,12 @@ where
                 )?;
             }
         } else if line.starts_with("@@") {
+            painter.paint_buffered_minus_and_plus_lines();
             state = State::HunkHeader;
             painter.set_highlighter();
             if should_handle(&state, config) {
                 painter.emit()?;
-                handle_hunk_header_line(&mut painter, &line, &raw_line, config)?;
+                handle_hunk_header_line(&mut painter, &line, &raw_line, &plus_file, config)?;
                 continue;
             }
         } else if source == Source::DiffUnified && line.starts_with("Only in ")
@@ -135,8 +140,8 @@ where
             // See https://github.com/dandavison/delta/issues/60#issuecomment-557485242 for a
             // proposal for more robust parsing logic.
 
-            state = State::FileMeta;
             painter.paint_buffered_minus_and_plus_lines();
+            state = State::FileMeta;
             if should_handle(&State::FileMeta, config) {
                 painter.emit()?;
                 handle_generic_file_meta_header_line(&mut painter, &line, &raw_line, config)?;
@@ -155,7 +160,11 @@ where
             continue;
         } else {
             painter.emit()?;
-            writeln!(painter.writer, "{}", raw_line)?;
+            writeln!(
+                painter.writer,
+                "{}",
+                format::format_raw_line(&raw_line, config)
+            )?;
         }
     }
 
@@ -240,10 +249,25 @@ fn handle_commit_meta_header_line(
             draw::write_no_decoration
         }
     };
+    let (formatted_line, formatted_raw_line) = if config.hyperlinks {
+        (
+            Cow::from(
+                features::hyperlinks::format_commit_line_with_osc8_commit_hyperlink(line, config),
+            ),
+            Cow::from(
+                features::hyperlinks::format_commit_line_with_osc8_commit_hyperlink(
+                    raw_line, config,
+                ),
+            ),
+        )
+    } else {
+        (Cow::from(line), Cow::from(raw_line))
+    };
+
     draw_fn(
         painter.writer,
-        &format!("{}{}", line, if pad { " " } else { "" }),
-        &format!("{}{}", raw_line, if pad { " " } else { "" }),
+        &format!("{}{}", formatted_line, if pad { " " } else { "" }),
+        &format!("{}{}", formatted_raw_line, if pad { " " } else { "" }),
         &config.decorations_width,
         config.commit_style,
         decoration_ansi_term_style,
@@ -332,6 +356,7 @@ fn handle_hunk_header_line(
     painter: &mut Painter,
     line: &str,
     raw_line: &str,
+    plus_file: &str,
     config: &Config,
 ) -> std::io::Result<()> {
     if config.hunk_header_style.is_omitted {
@@ -391,7 +416,7 @@ fn handle_hunk_header_line(
         };
         writeln!(painter.writer)?;
         if !line.is_empty() {
-            let lines = vec![line];
+            let lines = vec![(line, State::HunkHeader)];
             let syntax_style_sections = Painter::get_syntax_style_sections_for_lines(
                 &lines,
                 &State::HunkHeader,
@@ -400,8 +425,8 @@ fn handle_hunk_header_line(
             );
             Painter::paint_lines(
                 syntax_style_sections,
-                vec![vec![(config.hunk_header_style, &lines[0])]],
-                &State::HunkHeader,
+                vec![vec![(config.hunk_header_style, &lines[0].0)]], // TODO: compute style from state
+                [State::HunkHeader].iter(),
                 &mut painter.output_buffer,
                 config,
                 &mut None,
@@ -425,16 +450,28 @@ fn handle_hunk_header_line(
     };
     // Emit a single line number, or prepare for full line-numbering
     if config.line_numbers {
-        painter.line_numbers_data.initialize_hunk(line_numbers);
+        painter
+            .line_numbers_data
+            .initialize_hunk(line_numbers, plus_file.to_string());
     } else {
         let plus_line_number = line_numbers[line_numbers.len() - 1].0;
+        let formatted_plus_line_number = if config.hyperlinks {
+            features::hyperlinks::format_osc8_file_hyperlink(
+                plus_file,
+                Some(plus_line_number),
+                &format!("{}", plus_line_number),
+                config,
+            )
+        } else {
+            Cow::from(format!("{}", plus_line_number))
+        };
         match config.hunk_header_style.decoration_ansi_term_style() {
             Some(style) => writeln!(
                 painter.writer,
                 "{}",
-                style.paint(format!("{}", plus_line_number))
+                style.paint(formatted_plus_line_number)
             )?,
-            None => writeln!(painter.writer, "{}", plus_line_number)?,
+            None => writeln!(painter.writer, "{}", formatted_plus_line_number)?,
         }
     }
     Ok(())
@@ -463,15 +500,41 @@ fn handle_hunk_line(
     }
     match line.chars().next() {
         Some('-') => {
-            if state == State::HunkPlus {
+            if let State::HunkPlus(_) = state {
                 painter.paint_buffered_minus_and_plus_lines();
             }
-            painter.minus_lines.push(painter.prepare(&line, true));
-            State::HunkMinus
+            let state = match config.inspect_raw_lines {
+                cli::InspectRawLines::True
+                    if style::line_has_style_other_than(
+                        raw_line,
+                        [*style::GIT_DEFAULT_MINUS_STYLE, config.git_minus_style].iter(),
+                    ) =>
+                {
+                    State::HunkMinus(Some(painter.prepare_raw_line(raw_line)))
+                }
+                _ => State::HunkMinus(None),
+            };
+            painter
+                .minus_lines
+                .push((painter.prepare(&line, true), state.clone()));
+            state
         }
         Some('+') => {
-            painter.plus_lines.push(painter.prepare(&line, true));
-            State::HunkPlus
+            let state = match config.inspect_raw_lines {
+                cli::InspectRawLines::True
+                    if style::line_has_style_other_than(
+                        raw_line,
+                        [*style::GIT_DEFAULT_PLUS_STYLE, config.git_plus_style].iter(),
+                    ) =>
+                {
+                    State::HunkPlus(Some(painter.prepare_raw_line(raw_line)))
+                }
+                _ => State::HunkPlus(None),
+            };
+            painter
+                .plus_lines
+                .push((painter.prepare(&line, true), state.clone()));
+            state
         }
         Some(' ') => {
             painter.paint_buffered_minus_and_plus_lines();

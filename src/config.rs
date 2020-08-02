@@ -1,3 +1,4 @@
+use std::collections::HashMap;
 use std::path::PathBuf;
 use std::process;
 
@@ -13,7 +14,8 @@ use crate::color;
 use crate::delta::State;
 use crate::env;
 use crate::features::side_by_side;
-use crate::style::Style;
+use crate::git_config_entry::GitConfigEntry;
+use crate::style::{self, Style};
 
 pub struct Config {
     pub available_terminal_width: usize,
@@ -25,8 +27,20 @@ pub struct Config {
     pub file_removed_label: String,
     pub file_renamed_label: String,
     pub file_style: Style,
-    pub keep_plus_minus_markers: bool,
+    pub git_config_entries: HashMap<String, GitConfigEntry>,
     pub hunk_header_style: Style,
+    pub hyperlinks: bool,
+    pub hyperlinks_file_link_format: String,
+    pub inspect_raw_lines: cli::InspectRawLines,
+    pub keep_plus_minus_markers: bool,
+    pub line_numbers: bool,
+    pub line_numbers_left_format: String,
+    pub line_numbers_left_style: Style,
+    pub line_numbers_minus_style: Style,
+    pub line_numbers_plus_style: Style,
+    pub line_numbers_right_format: String,
+    pub line_numbers_right_style: Style,
+    pub line_numbers_zero_style: Style,
     pub max_buffered_lines: usize,
     pub max_line_distance: f64,
     pub max_line_distance_for_naively_paired_lines: f64,
@@ -38,29 +52,23 @@ pub struct Config {
     pub navigate: bool,
     pub null_style: Style,
     pub null_syntect_style: SyntectStyle,
-    pub line_numbers_left_format: String,
-    pub line_numbers_left_style: Style,
-    pub line_numbers_minus_style: Style,
-    pub line_numbers_plus_style: Style,
-    pub line_numbers_right_format: String,
-    pub line_numbers_right_style: Style,
-    pub line_numbers_zero_style: Style,
     pub paging_mode: PagingMode,
     pub plus_emph_style: Style,
     pub plus_empty_line_marker_style: Style,
     pub plus_file: Option<PathBuf>,
     pub plus_non_emph_style: Style,
     pub plus_style: Style,
-    pub line_numbers: bool,
+    pub git_minus_style: Style,
+    pub git_plus_style: Style,
     pub side_by_side: bool,
     pub side_by_side_data: side_by_side::SideBySideData,
     pub syntax_dummy_theme: SyntaxTheme,
     pub syntax_set: SyntaxSet,
     pub syntax_theme: Option<SyntaxTheme>,
     pub tab_width: usize,
+    pub tokenization_regex: Regex,
     pub true_color: bool,
     pub truncation_symbol: String,
-    pub tokenization_regex: Regex,
     pub whitespace_error_style: Style,
     pub zero_style: Style,
 }
@@ -68,6 +76,8 @@ pub struct Config {
 impl Config {
     pub fn get_style(&self, state: &State) -> &Style {
         match state {
+            State::HunkMinus(_) => &self.minus_style,
+            State::HunkPlus(_) => &self.plus_style,
             State::CommitMeta => &self.commit_style,
             State::FileMeta => &self.file_style,
             State::HunkHeader => &self.hunk_header_style,
@@ -122,6 +132,15 @@ impl From<cli::Opt> for Config {
             &opt.computed.available_terminal_width,
         );
 
+        let git_minus_style = match opt.git_config_entries.get("color.diff.old") {
+            Some(GitConfigEntry::Style(s)) => Style::from_git_str(s),
+            _ => *style::GIT_DEFAULT_MINUS_STYLE,
+        };
+        let git_plus_style = match opt.git_config_entries.get("color.diff.new") {
+            Some(GitConfigEntry::Style(s)) => Style::from_git_str(s),
+            _ => *style::GIT_DEFAULT_PLUS_STYLE,
+        };
+
         Self {
             available_terminal_width: opt.computed.available_terminal_width,
             background_color_extends_to_terminal_width: opt
@@ -134,8 +153,20 @@ impl From<cli::Opt> for Config {
             file_removed_label: opt.file_removed_label,
             file_renamed_label: opt.file_renamed_label,
             file_style,
-            keep_plus_minus_markers: opt.keep_plus_minus_markers,
+            git_config_entries: opt.git_config_entries,
             hunk_header_style,
+            hyperlinks: opt.hyperlinks,
+            hyperlinks_file_link_format: opt.hyperlinks_file_link_format,
+            inspect_raw_lines: opt.computed.inspect_raw_lines,
+            keep_plus_minus_markers: opt.keep_plus_minus_markers,
+            line_numbers: opt.line_numbers,
+            line_numbers_left_format: opt.line_numbers_left_format,
+            line_numbers_left_style,
+            line_numbers_minus_style,
+            line_numbers_plus_style,
+            line_numbers_right_format: opt.line_numbers_right_format,
+            line_numbers_right_style,
+            line_numbers_zero_style,
             max_buffered_lines: 32,
             max_line_distance: opt.max_line_distance,
             max_line_distance_for_naively_paired_lines,
@@ -147,20 +178,14 @@ impl From<cli::Opt> for Config {
             navigate: opt.navigate,
             null_style: Style::new(),
             null_syntect_style: SyntectStyle::default(),
-            line_numbers_left_format: opt.line_numbers_left_format,
-            line_numbers_left_style,
-            line_numbers_minus_style,
-            line_numbers_plus_style,
-            line_numbers_right_format: opt.line_numbers_right_format,
-            line_numbers_right_style,
-            line_numbers_zero_style,
             paging_mode: opt.computed.paging_mode,
             plus_emph_style,
             plus_empty_line_marker_style,
             plus_file: opt.plus_file.map(|s| s.clone()),
             plus_non_emph_style,
             plus_style,
-            line_numbers: opt.line_numbers,
+            git_minus_style,
+            git_plus_style,
             side_by_side: opt.side_by_side,
             side_by_side_data,
             syntax_dummy_theme: SyntaxTheme::default(),

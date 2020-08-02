@@ -13,6 +13,7 @@ use syntect::parsing::SyntaxSet;
 use crate::bat::assets::HighlightingAssets;
 use crate::bat::output::PagingMode;
 use crate::git_config::GitConfig;
+use crate::git_config_entry::GitConfigEntry;
 use crate::options;
 
 #[derive(StructOpt, Clone, Default)]
@@ -233,6 +234,19 @@ pub struct Opt {
     /// --file-renamed-label.
     pub navigate: bool,
 
+    #[structopt(long = "hyperlinks")]
+    /// Render commit hashes, file names, and line numbers as hyperlinks, according to the
+    /// hyperlink spec for terminal emulators:
+    /// https://gist.github.com/egmontkob/eb114294efbcd5adb1944c9f3cb5feda. By default, file names
+    /// and line numbers link to the local file using a file URL, whereas commit hashes link to the
+    /// commit in GitHub, if the remote repository is hosted by GitHub. See
+    /// --hyperlinks-file-link-format for full control over the file URLs emitted. Hyperlinks are
+    /// supported by several common terminal emulators. However, they are not yet supported by
+    /// less, so they will not work in delta unless you install a patched fork of less (see
+    /// https://github.com/dandavison/less). If you use tmux, then you will also need a patched
+    /// fork of tmux (see https://github.com/dandavison/tmux).
+    pub hyperlinks: bool,
+
     #[structopt(long = "keep-plus-minus-markers")]
     /// Prefix added/removed lines with a +/- character, exactly as git does. By default, delta
     /// does not emit any prefix, so code can be copied directly from delta's output.
@@ -340,6 +354,17 @@ pub struct Opt {
     /// (overline), or the combination 'ul ol'.
     pub file_decoration_style: String,
 
+    /// Format string for file hyperlinks. The placeholders "{path}" and "{line}" will be replaced
+    /// by the absolute file path and the line number, respectively. The default value of this
+    /// option creates hyperlinks using standard file URLs; your operating system should open these
+    /// in the application registered for that file type. However, these do not make use of the
+    /// line number. In order for the link to open the file at the correct line number, you could
+    /// use a custom URL format such as "file-line://{path}:{line}" and register an application to
+    /// handle the custom "file-line" URL scheme by opening the file in your editor/IDE at the
+    /// indicated line number. See https://github.com/dandavison/open-in-editor for an example.
+    #[structopt(long = "hyperlinks-file-link-format", default_value = "file://{path}")]
+    pub hyperlinks_file_link_format: String,
+
     #[structopt(long = "hunk-header-style", default_value = "syntax")]
     /// Style (foreground, background, attributes) for the hunk-header. See STYLES section. The
     /// style 'omit' can be used to remove the hunk header section from the output.
@@ -439,6 +464,12 @@ pub struct Opt {
     #[structopt(long = "24-bit-color", default_value = "auto")]
     pub true_color: String,
 
+    /// Whether to examine ANSI color escape sequences in raw lines received from Git and handle
+    /// lines colored in certain ways specially. This is on by default: it is how Delta supports
+    /// Git's --color-moved feature. Set this to "false" to disable this behavior.
+    #[structopt(long = "inspect-raw-lines", default_value = "true")]
+    pub inspect_raw_lines: String,
+
     /// Whether to use a pager when displaying output. Options are: auto, always, and never. The
     /// default pager is `less`: this can be altered by setting the environment variables BAT_PAGER
     /// or PAGER (BAT_PAGER has priority).
@@ -517,10 +548,14 @@ pub struct Opt {
 
     #[structopt(skip)]
     pub computed: ComputedValues,
+
+    #[structopt(skip)]
+    pub git_config_entries: HashMap<String, GitConfigEntry>,
 }
 
 #[derive(Default, Clone, Debug)]
 pub struct ComputedValues {
+    pub inspect_raw_lines: InspectRawLines,
     pub is_light_mode: bool,
     pub syntax_set: SyntaxSet,
     pub syntax_theme: Option<SyntaxTheme>,
@@ -532,7 +567,7 @@ pub struct ComputedValues {
     pub paging_mode: PagingMode,
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum Width {
     Fixed(usize),
     Variable,
@@ -541,6 +576,18 @@ pub enum Width {
 impl Default for Width {
     fn default() -> Self {
         Width::Variable
+    }
+}
+
+#[derive(Clone, Debug)]
+pub enum InspectRawLines {
+    True,
+    False,
+}
+
+impl Default for InspectRawLines {
+    fn default() -> Self {
+        InspectRawLines::False
     }
 }
 
