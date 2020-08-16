@@ -309,9 +309,9 @@ fn format_line_number(
 
 #[cfg(test)]
 pub mod tests {
-    use console::strip_ansi_codes;
     use regex::Captures;
 
+    use crate::ansi::strip_ansi_codes;
     use crate::tests::integration_test_utils::integration_test_utils::{
         make_config_from_args, run_delta,
     };
@@ -547,6 +547,16 @@ pub mod tests {
         assert_eq!(lines.next().unwrap(), "10000⋮9999 │a = 1");
         assert_eq!(lines.next().unwrap(), "10001⋮     │b = 2");
         assert_eq!(lines.next().unwrap(), "     ⋮10000│bb = 2");
+    }
+
+    #[test]
+    fn test_color_only() {
+        let config = make_config_from_args(&["--line-numbers", "--color-only"]);
+        let output = run_delta(TWO_MINUS_LINES_DIFF, &config);
+        let mut lines = output.lines().skip(5);
+        let (line_1, line_2) = (lines.next().unwrap(), lines.next().unwrap());
+        assert_eq!(strip_ansi_codes(line_1), " 1  ⋮    │-a = 1");
+        assert_eq!(strip_ansi_codes(line_2), " 2  ⋮    │-b = 2");
     }
 
     pub const TWO_MINUS_LINES_DIFF: &str = "\

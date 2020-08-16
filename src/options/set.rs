@@ -78,7 +78,14 @@ pub fn set_options(
     let option_names = cli::Opt::get_option_names();
 
     // Set features
-    let builtin_features = features::make_builtin_features();
+    let mut builtin_features = features::make_builtin_features();
+
+    // --color-only is used for interactive.diffFilter (git add -p) and side-by-side cannot be used
+    // there (does not emit lines in 1-1 correspondence with raw git output). See #274.
+    if config::user_supplied_option("color-only", arg_matches) {
+        builtin_features.remove("side-by-side");
+    }
+
     let features = gather_features(opt, &builtin_features, git_config);
     opt.features = features.join(" ");
 
@@ -133,6 +140,7 @@ pub fn set_options(
             inspect_raw_lines,
             keep_plus_minus_markers,
             max_line_distance,
+            max_line_length,
             // Hack: minus-style must come before minus-*emph-style because the latter default
             // dynamically to the value of the former.
             minus_style,
@@ -176,6 +184,12 @@ pub fn set_options(
     opt.computed.inspect_raw_lines =
         cli::InspectRawLines::from_str(&opt.inspect_raw_lines).unwrap();
     opt.computed.paging_mode = parse_paging_mode(&opt.paging_mode);
+
+    // --color-only is used for interactive.diffFilter (git add -p) and side-by-side cannot be used
+    // there (does not emit lines in 1-1 correspondence with raw git output). See #274.
+    if opt.color_only {
+        opt.side_by_side = false;
+    }
 }
 
 #[allow(non_snake_case)]
@@ -415,28 +429,34 @@ fn gather_builtin_features_recursively<'a>(
         return;
     }
     features.push_front(feature_string);
-    let feature_data = builtin_features.get(feature).unwrap();
-    if let Some(child_features_fn) = feature_data.get("features") {
-        if let ProvenancedOptionValue::DefaultValue(OptionValue::String(features_string)) =
-            child_features_fn(opt, &None)
-        {
-            for child_feature in split_feature_string(&features_string) {
-                gather_builtin_features_recursively(child_feature, features, builtin_features, opt);
-            }
-        }
-    }
-    for child_feature in builtin_features.keys() {
-        if let Some(child_features_fn) = feature_data.get(child_feature) {
-            if let ProvenancedOptionValue::DefaultValue(OptionValue::Boolean(value)) =
+    if let Some(feature_data) = builtin_features.get(feature) {
+        if let Some(child_features_fn) = feature_data.get("features") {
+            if let ProvenancedOptionValue::DefaultValue(OptionValue::String(features_string)) =
                 child_features_fn(opt, &None)
             {
-                if value {
+                for child_feature in split_feature_string(&features_string) {
                     gather_builtin_features_recursively(
                         child_feature,
                         features,
                         builtin_features,
                         opt,
                     );
+                }
+            }
+        }
+        for child_feature in builtin_features.keys() {
+            if let Some(child_features_fn) = feature_data.get(child_feature) {
+                if let ProvenancedOptionValue::DefaultValue(OptionValue::Boolean(value)) =
+                    child_features_fn(opt, &None)
+                {
+                    if value {
+                        gather_builtin_features_recursively(
+                            child_feature,
+                            features,
+                            builtin_features,
+                            opt,
+                        );
+                    }
                 }
             }
         }
@@ -581,10 +601,12 @@ pub mod tests {
 
     #[test]
     fn test_options_can_be_set_in_git_config() {
+        // In general the values here are not the default values. However there are some exceptions
+        // since e.g. color-only = true (non-default) forces side-by-side = false (default).
         let git_config_contents = b"
 [delta]
     24-bit-color = never
-    color-only = true
+    color-only = false
     commit-decoration-style = black black
     commit-style = black black
     dark = false
@@ -610,6 +632,7 @@ pub mod tests {
     line-numbers-right-style = black black
     line-numbers-zero-style = black black
     max-line-distance = 77
+    max-line-length = 77
     minus-emph-style = black black
     minus-empty-line-marker-style = black black
     minus-non-emph-style = black black
@@ -639,7 +662,7 @@ pub mod tests {
         );
 
         assert_eq!(opt.true_color, "never");
-        assert_eq!(opt.color_only, true);
+        assert_eq!(opt.color_only, false);
         assert_eq!(opt.commit_decoration_style, "black black");
         assert_eq!(opt.commit_style, "black black");
         assert_eq!(opt.dark, false);
@@ -666,6 +689,7 @@ pub mod tests {
         assert_eq!(opt.line_numbers_right_style, "black black");
         assert_eq!(opt.line_numbers_zero_style, "black black");
         assert_eq!(opt.max_line_distance, 77 as f64);
+        assert_eq!(opt.max_line_length, 77);
         assert_eq!(opt.minus_emph_style, "black black");
         assert_eq!(opt.minus_empty_line_marker_style, "black black");
         assert_eq!(opt.minus_non_emph_style, "black black");

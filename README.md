@@ -5,6 +5,26 @@
 
 Code evolves, and studying diffs is a fundamental mode of work. Delta aims to make this both efficient and enjoyable: it allows you to make extensive changes to the layout and styling of diffs, as well as allowing you to stay arbitrarily close to the default git/diff output.
 
+<table>
+  <tr>
+    <td>
+      <img width=400px src="https://user-images.githubusercontent.com/52205/86275526-76792100-bba1-11ea-9e78-6be9baa80b29.png" alt="image" />
+      <br>
+      <sub>delta with <code>line-numbers</code> activated</sub>
+    </td>
+  </tr>
+</table>
+
+<table>
+  <tr>
+    <td>
+      <img width=800px src="https://user-images.githubusercontent.com/52205/87230973-412eb900-c381-11ea-8aec-cc200290bd1b.png" alt="image" />
+      <br>
+      <sub>delta with <code>side-by-side</code> and <code>line-numbers</code> activated</sub>
+    </td>
+  </tr>
+</table>
+
 #### Delta's main features are:
 
 - Language syntax highlighting with color themes
@@ -30,7 +50,7 @@ The most convenient way to configure delta is with a `[delta]` section in `~/.gi
     diffFilter = delta --color-only
 
 [delta]
-    features = decorations
+    features = side-by-side line-numbers decorations
     whitespace-error-style = 22 reverse
 
 [delta "decorations"]
@@ -50,11 +70,9 @@ git config --global delta.side-by-side true
 Contents
 ========
 
-* [Features](#features)
 * [Installation](#installation)
 * [Configuration](#configuration)
 * [Usage](#usage)
-   * [Supported languages and themes](#supported-languages-and-themes)
    * [Choosing colors (styles)](#choosing-colors-styles)
    * [Line numbers](#line-numbers)
    * [Side-by-side view](#side-by-side-view)
@@ -66,6 +84,7 @@ Contents
    * [Using Delta on Windows](#using-delta-on-windows)
    * [Mouse scrolling](#mouse-scrolling)
    * [Using Delta with Magit](#using-delta-with-magit)
+   * [Supported languages and themes](#supported-languages-and-themes)
 * [Comparisons with other tools](#comparisons-with-other-tools)
 * [Build delta from source](#build-delta-from-source)
 * [Related projects](#related-projects)
@@ -75,7 +94,7 @@ Contents
 * [Full --help output](#full---help-output)
 * [Delta configs used in screenshots](#delta-configs-used-in-screenshots)
    * [Side-by-side view](#side-by-side-view-1)
-         
+
 
 Here's what `git show` can look like with git configured to use delta:
 
@@ -147,7 +166,6 @@ Here's what `git show` can look like with git configured to use delta:
 
 <br>
 
-## Features
 |                                                | delta | git | [diff-so-fancy] /<br>[diff-highlight] | github/gitlab |
 |------------------------------------------------|-------|-----|---------------------------------------|---------------|
 | language syntax highlighting                   | ✅    | ❌  | ❌                                    | ✅           |
@@ -165,7 +183,7 @@ In addition, delta handles traditional unified diff output.
 
 ## Installation
 
-You can download an executable for your system: [Linux](https://github.com/dandavison/delta/releases/download/0.3.0/delta-0.3.0-x86_64-unknown-linux-musl.tar.gz) | [MacOS](https://github.com/dandavison/delta/releases/download/0.3.0/delta-0.3.0-x86_64-apple-darwin.tar.gz) | [Windows](https://github.com/dandavison/delta/releases/download/0.3.0/delta-0.3.0-x86_64-pc-windows-gnu.zip) | [All](https://github.com/dandavison/delta/releases)
+You can download an executable for your system: [Linux](https://github.com/dandavison/delta/releases/download/0.4.1/delta-0.4.1-x86_64-unknown-linux-musl.tar.gz) | [MacOS](https://github.com/dandavison/delta/releases/download/0.4.1/delta-0.4.1-x86_64-apple-darwin.tar.gz) | [Windows](https://github.com/dandavison/delta/releases/download/0.4.1/delta-0.4.1-x86_64-pc-windows-gnu.zip) | [All](https://github.com/dandavison/delta/releases)
 
 Alternatively, delta is available in the following package managers:
 
@@ -225,7 +243,7 @@ Alternatively, delta is available in the following package managers:
 
 ## Configuration
 
-Set delta to be git's pager in your `.gitconfig`. Delta accepts many command line options to alter colors and other details of the output. An example is
+Set delta to be git's pager in your `.gitconfig`. Delta has many options to alter colors and other details of the output. An example is
 ```gitconfig
 [core]
     pager = delta
@@ -259,18 +277,6 @@ diff -u a.txt b.txt | delta
 ```
 
 ## Usage
-
-
-### Supported languages and themes
-To list the supported languages and color themes, use `delta --list-languages` and `delta --list-syntax-themes`. To see a demo of the color themes, use `delta --show-syntax-themes`:
-
-To add your own custom color theme, or language, please follow the instructions in the Customization section of the [bat documentation](https://github.com/sharkdp/bat/#customization):
-- [Adding a custom language](https://github.com/sharkdp/bat/#adding-new-syntaxes--language-definitions)
-- [Adding a custom theme](https://github.com/sharkdp/bat/#adding-new-themes)
-
-Delta automatically recognizes custom themes and languages added to bat. You will need to install bat in order to run the `bat cache --build` command.
-
-The languages and color themes that ship with delta are those that ship with bat. So, to propose a new language or color theme for inclusion in delta, it would need to be a helpful addition to bat, in which case please open a PR against bat.
 
 
 ### Choosing colors (styles)
@@ -360,9 +366,7 @@ The within-line highlighting rules employed by diff-highlight (and therefore by 
 
 ### `--color-moved` support
 
-[_**Unreleased feature**: available now if you build Delta from source, and will be included in the next Delta release. See [#72](https://github.com/dandavison/delta/issues/72)._]
-
-Recent versions of Git are able to detect moved blocks of code and style them differently from the usual removed/added lines. If you have activated this feature in Git, then Delta will automatically detect such differently-styled lines, and display them unchanged, i.e. with the raw colors it receives from Git.
+Recent versions of Git (≥ v2.17, April 2018) are able to detect moved blocks of code and style them differently from the usual removed/added lines. If you have activated this feature in Git, then Delta will automatically detect such differently-styled lines, and display them unchanged, i.e. with the raw colors it receives from Git.
 
 To activate the Git feature, use
 
@@ -422,6 +426,18 @@ See [issue #58](https://github.com/dandavison/delta/issues/58) and [bat README /
 Delta can be used when displaying diffs in the Magit git client: see [magit-delta](https://github.com/dandavison/magit-delta). Here's a screenshot:
 
 <table><tr><td><img width=500px src="https://user-images.githubusercontent.com/52205/79934267-2acb2e00-8420-11ea-8bc4-546508fd3581.png" alt="image" /></td></tr></table>
+
+
+### Supported languages and themes
+To list the supported languages and color themes, use `delta --list-languages` and `delta --list-syntax-themes`. To see a demo of the color themes, use `delta --show-syntax-themes`:
+
+To add your own custom color theme, or language, please follow the instructions in the Customization section of the [bat documentation](https://github.com/sharkdp/bat/#customization):
+- [Adding a custom language](https://github.com/sharkdp/bat/#adding-new-syntaxes--language-definitions)
+- [Adding a custom theme](https://github.com/sharkdp/bat/#adding-new-themes)
+
+Delta automatically recognizes custom themes and languages added to bat. You will need to install bat in order to run the `bat cache --build` command.
+
+The languages and color themes that ship with delta are those that ship with bat. So, to propose a new language or color theme for inclusion in delta, it would need to be a helpful addition to bat, in which case please open a PR against bat.
 
 
 ## Comparisons with other tools
@@ -492,6 +508,7 @@ and use the executable found at `./target/release/delta`.
 ## Related projects
 
 ### Used by delta
+- [alacritty/vte](https://github.com/alacritty/vte)
 - [mitsuhiko/console](https://github.com/mitsuhiko/console)
 - [ogham/rust-ansi-term](https://github.com/ogham/rust-ansi-term)
 - [sharkdp/bat](https://github.com/sharkdp/bat)
@@ -516,7 +533,7 @@ and use the executable found at `./target/release/delta`.
 ## Full --help output
 
 ```
-delta 0.3.0
+delta 0.4.1
 A viewer for git and diff output
 
 USAGE:
@@ -529,12 +546,22 @@ FLAGS:
                                      see the style options and --syntax-theme
     -n, --line-numbers               Display line numbers next to the diff. See LINE NUMBERS section
     -s, --side-by-side               Display a side-by-side diff view instead of the traditional view
-        --diff-highlight             Emulate diff-highlight (https://github.com/git/git/tree/master/contrib/diff-
-                                     highlight)
+        --diff-highlight             Emulate diff-highlight (https://github.com/git/git/tree/master/contrib/diff-highlight)
         --diff-so-fancy              Emulate diff-so-fancy (https://github.com/so-fancy/diff-so-fancy)
         --navigate                   Activate diff navigation: use n to jump forwards and N to jump backwards. To change
                                      the file labels used see --file-modified-label, --file-removed-label, --file-added-
                                      label, --file-renamed-label
+        --hyperlinks                 Render commit hashes, file names, and line numbers as hyperlinks, according to the
+                                     hyperlink spec for terminal emulators:
+                                     https://gist.github.com/egmontkob/eb114294efbcd5adb1944c9f3cb5feda. By default,
+                                     file names and line numbers link to the local file using a file URL, whereas commit
+                                     hashes link to the commit in GitHub, if the remote repository is hosted by GitHub.
+                                     See --hyperlinks-file-link-format for full control over the file URLs emitted.
+                                     Hyperlinks are supported by several common terminal emulators. However, they are
+                                     not yet supported by less, so they will not work in delta unless you install a
+                                     patched fork of less (see https://github.com/dandavison/less). If you use tmux,
+                                     then you will also need a patched fork of tmux (see
+                                     https://github.com/dandavison/tmux)
         --keep-plus-minus-markers    Prefix added/removed lines with a +/- character, exactly as git does. By default,
                                      delta does not emit any prefix, so code can be copied directly from delta's output
         --show-config                Display the active values for all Delta options. Style options are displayed with
@@ -565,14 +592,11 @@ OPTIONS:
             variable, if that contains a valid theme name. --syntax-theme=none disables all syntax highlighting [env:
             BAT_THEME=]
         --minus-style <minus-style>
-            Style (foreground, background, attributes) for removed lines. See STYLES section [default: normal
-            auto]
+            Style (foreground, background, attributes) for removed lines. See STYLES section [default: normal auto]
         --zero-style <zero-style>
-            Style (foreground, background, attributes) for unchanged lines. See STYLES section [default: syntax
-            normal]
+            Style (foreground, background, attributes) for unchanged lines. See STYLES section [default: syntax normal]
         --plus-style <plus-style>
             Style (foreground, background, attributes) for added lines. See STYLES section [default: syntax auto]
-
         --minus-emph-style <minus-emph-style>
             Style (foreground, background, attributes) for emphasized sections of removed lines. See STYLES section
             [default: normal auto]
@@ -599,6 +623,14 @@ OPTIONS:
             Style (foreground, background, attributes) for the file decoration. See STYLES section. The style string
             should contain one of the special attributes 'box', 'ul' (underline), 'ol' (overline), or the combination
             'ul ol' [default: blue ul]
+        --hyperlinks-file-link-format <hyperlinks-file-link-format>
+            Format string for file hyperlinks. The placeholders "{path}" and "{line}" will be replaced by the absolute
+            file path and the line number, respectively. The default value of this option creates hyperlinks using
+            standard file URLs; your operating system should open these in the application registered for that file
+            type. However, these do not make use of the line number. In order for the link to open the file at the
+            correct line number, you could use a custom URL format such as "file-line://{path}:{line}" and register an
+            application to handle the custom "file-line" URL scheme by opening the file in your editor/IDE at the
+            indicated line number. See https://github.com/dandavison/open-in-editor for an example [default: file://{path}]
         --hunk-header-style <hunk-header-style>
             Style (foreground, background, attributes) for the hunk-header. See STYLES section. The style 'omit' can be
             used to remove the hunk header section from the output [default: syntax]
@@ -612,8 +644,7 @@ OPTIONS:
             similar to `git --word-diff`) [default: \w+]
         --max-line-distance <max-line-distance>
             The maximum distance between two lines for them to be inferred to be homologous. Homologous line pairs are
-            highlighted according to the deletion and insertion operations transforming one into the other [default:
-            0.6]
+            highlighted according to the deletion and insertion operations transforming one into the other [default: 0.6]
         --line-numbers-minus-style <line-numbers-minus-style>
             Style (foreground, background, attributes) for line numbers in the old (minus) version of the file. See
             STYLES and LINE NUMBERS sections [default: auto]
@@ -663,16 +694,18 @@ OPTIONS:
             "24bit". If your terminal application (the application you use to enter commands at a shell prompt) supports
             24 bit colors, then it probably already sets this environment variable, in which case you don't need to do
             anything [default: auto]
+        --inspect-raw-lines <inspect-raw-lines>
+            Whether to examine ANSI color escape sequences in raw lines received from Git and handle lines colored in
+            certain ways specially. This is on by default: it is how Delta supports Git's --color-moved feature. Set
+            this to "false" to disable this behavior [default: true]
         --paging <paging-mode>
             Whether to use a pager when displaying output. Options are: auto, always, and never. The default pager is
             `less`: this can be altered by setting the environment variables BAT_PAGER or PAGER (BAT_PAGER has priority)
             [default: auto]
         --minus-empty-line-marker-style <minus-empty-line-marker-style>
-            Style for removed empty line marker (used only if --minus-style has no background color) [default:
-            normal auto]
+            Style for removed empty line marker (used only if --minus-style has no background color) [default: normal auto]
         --plus-empty-line-marker-style <plus-empty-line-marker-style>
-            Style for added empty line marker (used only if --plus-style has no background color) [default: normal
-            auto]
+            Style for added empty line marker (used only if --plus-style has no background color) [default: normal auto]
         --whitespace-error-style <whitespace-error-style>
             Style for whitespace errors. Defaults to color.diff.whitespace if that is set in git config, or else
             'magenta reverse' [default: auto auto]

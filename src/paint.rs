@@ -88,10 +88,10 @@ impl<'a> Painter<'a> {
         if !line.is_empty() {
             let mut line = line.graphemes(true);
 
-            // The first column contains a -/+/space character, added by git. We substitute it for a
-            // space now, so that it is not present during syntax highlighting. When emitting the line
-            // in Painter::paint_lines, we drop the space (unless --keep-plus-minus-markers is in
-            // effect in which case we replace it with the appropriate marker).
+            // The first column contains a -/+/space character, added by git. We substitute it for
+            // a space now, so that it is not present during syntax highlighting. When emitting the
+            // line in Painter::paint_line, we drop the space (unless --keep-plus-minus-markers is
+            // in effect in which case we replace it with the appropriate marker).
             // TODO: Things should, but do not, work if this leading space is omitted at this stage.
             // See comment in align::Alignment::new.
             line.next();
@@ -104,7 +104,7 @@ impl<'a> Painter<'a> {
     /// Remove the initial +/- character of a line that will be emitted unchanged, including any
     /// ANSI escape sequences.
     pub fn prepare_raw_line(&self, line: &str) -> String {
-        ansi::ansi_preserving_slice(line, 1)
+        ansi::ansi_preserving_slice(&self.expand_tabs(line.graphemes(true)), 1)
     }
 
     /// Expand tabs as spaces.
@@ -306,7 +306,7 @@ impl<'a> Painter<'a> {
             State::HunkMinus(None) => (config.minus_style, config.minus_non_emph_style),
             State::HunkMinus(Some(raw_line)) => {
                 // TODO: This is the second time we are parsing the ANSI sequences
-                if let Some(ansi_term_style) = ansi::parse::parse_first_style(raw_line.bytes()) {
+                if let Some(ansi_term_style) = ansi::parse_first_style(raw_line) {
                     let style = Style {
                         ansi_term_style,
                         ..Style::new()
@@ -320,7 +320,7 @@ impl<'a> Painter<'a> {
             State::HunkPlus(None) => (config.plus_style, config.plus_non_emph_style),
             State::HunkPlus(Some(raw_line)) => {
                 // TODO: This is the second time we are parsing the ANSI sequences
-                if let Some(ansi_term_style) = ansi::parse::parse_first_style(raw_line.bytes()) {
+                if let Some(ansi_term_style) = ansi::parse_first_style(raw_line) {
                     let style = Style {
                         ansi_term_style,
                         ..Style::new()
@@ -472,7 +472,11 @@ impl<'a> Painter<'a> {
             if fake {
                 line_sections.push(vec![(config.null_syntect_style, line.as_str())])
             } else {
-                line_sections.push(highlighter.highlight(line, &config.syntax_set))
+                // The first character is a space injected by delta. See comment in
+                // Painter:::prepare.
+                let mut this_line_sections = highlighter.highlight(&line[1..], &config.syntax_set);
+                this_line_sections.insert(0, (config.null_syntect_style, &line[..1]));
+                line_sections.push(this_line_sections);
             }
         }
         line_sections
