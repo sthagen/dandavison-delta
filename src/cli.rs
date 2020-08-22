@@ -561,16 +561,17 @@ pub struct Opt {
 
 #[derive(Default, Clone, Debug)]
 pub struct ComputedValues {
+    pub available_terminal_width: usize,
+    pub background_color_extends_to_terminal_width: bool,
+    pub decorations_width: Width,
     pub inspect_raw_lines: InspectRawLines,
     pub is_light_mode: bool,
+    pub line_numbers_mode: LineNumbersMode,
+    pub paging_mode: PagingMode,
+    pub syntax_dummy_theme: SyntaxTheme,
     pub syntax_set: SyntaxSet,
     pub syntax_theme: Option<SyntaxTheme>,
-    pub syntax_dummy_theme: SyntaxTheme,
     pub true_color: bool,
-    pub available_terminal_width: usize,
-    pub decorations_width: Width,
-    pub background_color_extends_to_terminal_width: bool,
-    pub paging_mode: PagingMode,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -594,6 +595,19 @@ pub enum InspectRawLines {
 impl Default for InspectRawLines {
     fn default() -> Self {
         InspectRawLines::False
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum LineNumbersMode {
+    None,
+    First,
+    Full,
+}
+
+impl Default for LineNumbersMode {
+    fn default() -> Self {
+        LineNumbersMode::First
     }
 }
 
