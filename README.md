@@ -3,7 +3,7 @@
 
 ## A viewer for git and diff output
 
-Code evolves, and studying diffs is a fundamental mode of work. Delta aims to make this both efficient and enjoyable: it allows you to make extensive changes to the layout and styling of diffs, as well as allowing you to stay arbitrarily close to the default git/diff output.
+Code evolves, and we all spend time studying diffs. Delta aims to make this both efficient and enjoyable: it allows you to make extensive changes to the layout and styling of diffs, as well as allowing you to stay arbitrarily close to the default git/diff output.
 
 <table>
   <tr>
@@ -388,13 +388,21 @@ In order to support this feature, Delta has to look at the raw colors it receive
 
 Use the `navigate` feature to activate navigation keybindings. In this mode, pressing `n` will jump forward to the next file in the diff, and `N` will jump backwards. If you are viewing multiple commits (e.g. via `git log -p`) then navigation will also visit commit boundaries.
 
-The recommended way to use `navigate` is to activate it only when needed, for example by doing
+The recommended way to use `navigate` is to activate it only when needed, for example by using the environment variable `DELTA_NAVIGATE`:
+
+```bash
+DELTA_NAVIGATE=1 git diff
+```
+
+Please note that if the environment variable is set to _anything at all_ (even `"false"` or `"0"` or `""`) then that is interpreted as true. The above command sets the environment variable in the child process only, so it has no permanent effect on your shell session. But if, for whatever reason, you do have it set in your shell environment then to deactivate it you must _unset_ the environment variable (e.g. using `unset DELTA_NAVIGATE`). You cannot deactivate it by assigning a value to it.
+
+An alternative is to mutate your git config file from the command line:
 
 ```bash
 git config --global delta.navigate true
 ```
 
-The reason is the following: Delta uses `less` as its pager, and the `navigate` feature works by doing `less --pattern <regex-matching-file-and-commit-lines>`. When the git output does not contain file/commit diff lines, `less --pattern` behaves unhelpfully (see [#234](https://github.com/dandavison/delta/issues/234), [#237](https://github.com/dandavison/delta/issues/2)).
+The reason that `navigate` should not be used all the time is that Delta uses `less` as its pager, and the `navigate` feature works by doing `less --pattern <regex-matching-file-and-commit-lines>`. When the git output does not contain file/commit diff lines, `less --pattern` behaves unhelpfully (see [#234](https://github.com/dandavison/delta/issues/234), [#237](https://github.com/dandavison/delta/issues/2)).
 
 
 ### 24 bit color (truecolor)
@@ -533,7 +541,7 @@ and use the executable found at `./target/release/delta`.
 ## Full --help output
 
 ```
-delta 0.4.1
+delta 0.4.3
 A viewer for git and diff output
 
 USAGE:
@@ -680,6 +688,9 @@ OPTIONS:
         --file-renamed-label <file-renamed-label>
             Text to display in front of a renamed file path [default: renamed:]
 
+        --max-line-length <max-line-length>
+            Truncate lines longer than this. To prevent any truncation, set to zero. Note that syntax-highlighting very
+            long lines (e.g. minified .js) will be very slow if they are not truncated [default: 512]
     -w, --width <width>
             The width of underline/overline decorations. Use --width=variable to extend decorations and background
             colors to the end of the text only. Otherwise background colors extend to the full terminal width
