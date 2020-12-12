@@ -6,8 +6,8 @@ use std::str::FromStr;
 use console::Term;
 use structopt::clap;
 
-use crate::bat::assets::HighlightingAssets;
-use crate::bat::output::PagingMode;
+use crate::bat_utils::assets::HighlightingAssets;
+use crate::bat_utils::output::PagingMode;
 use crate::cli;
 use crate::config;
 use crate::env;
@@ -100,15 +100,15 @@ pub fn set_options(
     // HACK: make minus-line styles have syntax-highlighting iff side-by-side.
     if features.contains(&"side-by-side".to_string()) {
         let prefix = "normal ";
-        if !config::user_supplied_option("minus-style", arg_matches) {
-            if opt.minus_style.starts_with(prefix) {
-                opt.minus_style = format!("syntax {}", &opt.minus_style[prefix.len()..]);
-            }
+        if !config::user_supplied_option("minus-style", arg_matches)
+            && opt.minus_style.starts_with(prefix)
+        {
+            opt.minus_style = format!("syntax {}", &opt.minus_style[prefix.len()..]);
         }
-        if !config::user_supplied_option("minus-emph-style", arg_matches) {
-            if opt.minus_emph_style.starts_with(prefix) {
-                opt.minus_emph_style = format!("syntax {}", &opt.minus_emph_style[prefix.len()..]);
-            }
+        if !config::user_supplied_option("minus-emph-style", arg_matches)
+            && opt.minus_emph_style.starts_with(prefix)
+        {
+            opt.minus_emph_style = format!("syntax {}", &opt.minus_emph_style[prefix.len()..]);
         }
     }
 
@@ -129,6 +129,7 @@ pub fn set_options(
             commit_decoration_style,
             commit_style,
             file_added_label,
+            file_copied_label,
             file_decoration_style,
             file_modified_label,
             file_removed_label,
@@ -140,6 +141,7 @@ pub fn set_options(
             hyperlinks_file_link_format,
             inspect_raw_lines,
             keep_plus_minus_markers,
+            line_buffer_size,
             max_line_distance,
             max_line_length,
             // Hack: minus-style must come before minus-*emph-style because the latter default
@@ -188,13 +190,13 @@ pub fn set_options(
         compute_line_numbers_mode(opt, &builtin_features, git_config, &option_names);
     opt.computed.paging_mode = parse_paging_mode(&opt.paging_mode);
 
-    // --color-only is used for interactive.diffFilter (git add -p) and side-by-side cannot be used
-    // there (does not emit lines in 1-1 correspondence with raw git output). See #274.
+    // --color-only is used for interactive.diffFilter (git add -p). side-by-side, and
+    // **-decoration-style cannot be used there (does not emit lines in 1-1 correspondence with raw git output).
+    // See #274.
     if opt.color_only {
         opt.side_by_side = false;
-        opt.file_style = "raw".to_string();
-        opt.commit_style = "raw".to_string();
-        opt.hunk_header_style = "raw".to_string();
+        opt.file_decoration_style = "none".to_string();
+        opt.commit_decoration_style = "none".to_string();
         opt.hunk_header_decoration_style = "none".to_string();
     }
 }
@@ -311,7 +313,7 @@ fn set__light__dark__syntax_theme__options(
 ///
 /// [delta "d"]
 ///     features = f e
-fn gather_features<'a>(
+fn gather_features(
     opt: &cli::Opt,
     builtin_features: &HashMap<String, features::BuiltinFeature>,
     git_config: &Option<git_config::GitConfig>,
@@ -364,7 +366,7 @@ fn gather_features<'a>(
     if let Some(git_config) = git_config {
         // Gather features from [delta] section if --features was not passed.
         if opt.features.is_empty() {
-            if let Some(feature_string) = git_config.get::<String>(&format!("delta.features")) {
+            if let Some(feature_string) = git_config.get::<String>("delta.features") {
                 for feature in split_feature_string(&feature_string.to_lowercase()) {
                     gather_features_recursively(
                         feature,
@@ -390,7 +392,7 @@ fn gather_features<'a>(
 }
 
 /// Add to feature list `features` all features in the tree rooted at `feature`.
-fn gather_features_recursively<'a>(
+fn gather_features_recursively(
     feature: &str,
     features: &mut VecDeque<String>,
     builtin_features: &HashMap<String, features::BuiltinFeature>,
@@ -426,7 +428,7 @@ fn gather_features_recursively<'a>(
 
 /// Look for builtin features requested via boolean feature flags (as opposed to via a "features"
 /// list) in a custom feature section in git config and add them to the features list.
-fn gather_builtin_features_from_flags_in_gitconfig<'a>(
+fn gather_builtin_features_from_flags_in_gitconfig(
     git_config_key: &str,
     features: &mut VecDeque<String>,
     builtin_features: &HashMap<String, features::BuiltinFeature>,
@@ -450,7 +452,7 @@ fn gather_builtin_features_from_flags_in_gitconfig<'a>(
 /// children of a node in the tree are features in (a) and (b). (In both cases the features
 /// referenced will be other builtin features, since a builtin feature is determined at compile
 /// time and therefore cannot know of the existence of a non-builtin custom features in gitconfig).
-fn gather_builtin_features_recursively<'a>(
+fn gather_builtin_features_recursively(
     feature: &str,
     features: &mut VecDeque<String>,
     builtin_features: &HashMap<String, features::BuiltinFeature>,
@@ -627,7 +629,7 @@ fn set_git_config_entries(opt: &mut cli::Opt, git_config: &mut git_config::GitCo
 pub mod tests {
     use std::fs::remove_file;
 
-    use crate::bat::output::PagingMode;
+    use crate::bat_utils::output::PagingMode;
     use crate::cli;
     use crate::tests::integration_test_utils::integration_test_utils;
 

@@ -3,6 +3,8 @@ class GitDelta < Formula
   desc "A viewer for git and diff output"
   homepage "https://github.com/dandavison/delta"
 
+  disable! because: "it is now in homebrew core. Please reinstall it as follows:\nbrew untap dandavison/delta\nbrew install git-delta\n"
+
   if OS.mac?
       url "https://github.com/dandavison/delta/releases/download/#{version}/delta-#{version}-x86_64-apple-darwin.tar.gz"
       sha256 "da1190e462dad40f543ebf116b0d175ee3396674a10e375b2c17184c953de643"

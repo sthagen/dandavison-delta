@@ -1,6 +1,5 @@
 use std::cmp::max;
 
-use ansi_term;
 use lazy_static::lazy_static;
 use regex::Regex;
 
@@ -201,7 +200,7 @@ impl<'a> LineNumbersData<'a> {
     }
 }
 
-fn parse_line_number_format<'a>(format_string: &'a str) -> LineNumberFormatData<'a> {
+fn parse_line_number_format(format_string: &str) -> LineNumberFormatData {
     let mut format_data = Vec::new();
     let mut offset = 0;
 
@@ -233,8 +232,9 @@ fn parse_line_number_format<'a>(format_string: &'a str) -> LineNumberFormatData<
     format_data
 }
 
+#[allow(clippy::too_many_arguments)]
 fn format_and_paint_line_number_field<'a>(
-    format_data: &Vec<LineNumberPlaceholderData<'a>>,
+    format_data: &[LineNumberPlaceholderData<'a>],
     style: &Style,
     minus_number: Option<usize>,
     plus_number: Option<usize>,

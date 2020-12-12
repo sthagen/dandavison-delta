@@ -9,6 +9,7 @@ use crate::features;
 // https://git-scm.com/docs/git-config#Documentation/git-config.txt-diffmnemonicPrefix
 const DIFF_PREFIXES: [&str; 6] = ["a/", "b/", "c/", "i/", "o/", "w/"];
 
+#[allow(clippy::tabs_in_doc_comments)]
 /// Given input like
 /// "--- one.rs	2019-11-20 06:16:08.000000000 +0100"
 /// Return "rs"
@@ -19,19 +20,19 @@ pub fn get_file_extension_from_marker_line(line: &str) -> Option<&str> {
         .and_then(|file| file.split('.').last())
 }
 
-pub fn get_file_path_from_file_meta_line(line: &str, git_diff_name: bool) -> String {
+#[derive(Debug, PartialEq)]
+pub enum FileEvent {
+    Change,
+    Copy,
+    Rename,
+    NoEvent,
+}
+
+pub fn parse_file_meta_line(line: &str, git_diff_name: bool) -> (String, FileEvent) {
     match line {
-        line if line.starts_with("rename from ") => {
-            let offset = "rename from ".len();
-            &line[offset..]
-        }
-        line if line.starts_with("rename to ") => {
-            let offset = "rename to ".len();
-            &line[offset..]
-        }
         line if line.starts_with("--- ") || line.starts_with("+++ ") => {
             let offset = 4;
-            match &line[offset..] {
+            let file = match &line[offset..] {
                 path if path == "/dev/null" => "/dev/null",
                 path if git_diff_name && DIFF_PREFIXES.iter().any(|s| path.starts_with(s)) => {
                     &path[2..]
@@ -39,10 +40,23 @@ pub fn get_file_path_from_file_meta_line(line: &str, git_diff_name: bool) -> Str
                 path if git_diff_name => &path,
                 path => path.split('\t').next().unwrap_or(""),
             }
+            .to_string();
+            (file, FileEvent::Change)
         }
-        _ => "",
+        line if line.starts_with("rename from ") => {
+            (line[12..].to_string(), FileEvent::Rename) // "rename from ".len()
+        }
+        line if line.starts_with("rename to ") => {
+            (line[10..].to_string(), FileEvent::Rename) // "rename to ".len()
+        }
+        line if line.starts_with("copy from ") => {
+            (line[10..].to_string(), FileEvent::Copy) // "copy from ".len()
+        }
+        line if line.starts_with("copy to ") => {
+            (line[8..].to_string(), FileEvent::Copy) // "copy to ".len()
+        }
+        _ => ("".to_string(), FileEvent::NoEvent),
     }
-    .to_string()
 }
 
 pub fn get_file_extension_from_file_meta_line_file_path(path: &str) -> Option<&str> {
@@ -57,13 +71,14 @@ pub fn get_file_change_description_from_file_paths(
     minus_file: &str,
     plus_file: &str,
     comparing: bool,
+    file_event: &FileEvent,
     config: &Config,
 ) -> String {
     if comparing {
         format!("comparing: {} ⟶   {}", minus_file, plus_file)
     } else {
         let format_label = |label: &str| {
-            if label.len() > 0 {
+            if !label.is_empty() {
                 format!("{} ", label)
             } else {
                 "".to_string()
@@ -94,7 +109,11 @@ pub fn get_file_change_description_from_file_paths(
             ),
             (minus_file, plus_file) => format!(
                 "{}{} ⟶   {}",
-                format_label(&config.file_renamed_label),
+                format_label(match file_event {
+                    FileEvent::Rename => &config.file_renamed_label,
+                    FileEvent::Copy => &config.file_copied_label,
+                    _ => "",
+                }),
                 format_file(minus_file),
                 format_file(plus_file)
             ),
@@ -143,7 +162,7 @@ pub fn parse_hunk_header(line: &str) -> (String, Vec<(usize, usize)>) {
         })
         .collect();
     let code_fragment = &caps[2];
-    return (code_fragment.to_string(), line_numbers_and_hunk_lengths);
+    (code_fragment.to_string(), line_numbers_and_hunk_lengths)
 }
 
 /// Attempt to parse input as a file path and return extension as a &str.
@@ -226,74 +245,77 @@ mod tests {
     #[test]
     fn test_get_file_path_from_git_file_meta_line() {
         assert_eq!(
-            get_file_path_from_file_meta_line("--- /dev/null", true),
-            "/dev/null"
+            parse_file_meta_line("--- /dev/null", true),
+            ("/dev/null".to_string(), FileEvent::Change)
         );
         for prefix in &DIFF_PREFIXES {
             assert_eq!(
-                get_file_path_from_file_meta_line(&format!("--- {}src/delta.rs", prefix), true),
-                "src/delta.rs"
+                parse_file_meta_line(&format!("--- {}src/delta.rs", prefix), true),
+                ("src/delta.rs".to_string(), FileEvent::Change)
             );
         }
         assert_eq!(
-            get_file_path_from_file_meta_line("--- src/delta.rs", true),
-            "src/delta.rs"
+            parse_file_meta_line("--- src/delta.rs", true),
+            ("src/delta.rs".to_string(), FileEvent::Change)
         );
         assert_eq!(
-            get_file_path_from_file_meta_line("+++ src/delta.rs", true),
-            "src/delta.rs"
+            parse_file_meta_line("+++ src/delta.rs", true),
+            ("src/delta.rs".to_string(), FileEvent::Change)
         );
     }
 
     #[test]
     fn test_get_file_path_from_git_file_meta_line_containing_spaces() {
         assert_eq!(
-            get_file_path_from_file_meta_line("+++ a/my src/delta.rs", true),
-            "my src/delta.rs"
+            parse_file_meta_line("+++ a/my src/delta.rs", true),
+            ("my src/delta.rs".to_string(), FileEvent::Change)
         );
         assert_eq!(
-            get_file_path_from_file_meta_line("+++ my src/delta.rs", true),
-            "my src/delta.rs"
+            parse_file_meta_line("+++ my src/delta.rs", true),
+            ("my src/delta.rs".to_string(), FileEvent::Change)
         );
         assert_eq!(
-            get_file_path_from_file_meta_line("+++ a/src/my delta.rs", true),
-            "src/my delta.rs"
+            parse_file_meta_line("+++ a/src/my delta.rs", true),
+            ("src/my delta.rs".to_string(), FileEvent::Change)
         );
         assert_eq!(
-            get_file_path_from_file_meta_line("+++ a/my src/my delta.rs", true),
-            "my src/my delta.rs"
+            parse_file_meta_line("+++ a/my src/my delta.rs", true),
+            ("my src/my delta.rs".to_string(), FileEvent::Change)
         );
         assert_eq!(
-            get_file_path_from_file_meta_line("+++ b/my src/my enough/my delta.rs", true),
-            "my src/my enough/my delta.rs"
+            parse_file_meta_line("+++ b/my src/my enough/my delta.rs", true),
+            (
+                "my src/my enough/my delta.rs".to_string(),
+                FileEvent::Change
+            )
         );
     }
 
     #[test]
     fn test_get_file_path_from_git_file_meta_line_rename() {
         assert_eq!(
-            get_file_path_from_file_meta_line("rename from nospace/file2.el", true),
-            "nospace/file2.el"
+            parse_file_meta_line("rename from nospace/file2.el", true),
+            ("nospace/file2.el".to_string(), FileEvent::Rename)
         );
     }
 
     #[test]
     fn test_get_file_path_from_git_file_meta_line_rename_containing_spaces() {
         assert_eq!(
-            get_file_path_from_file_meta_line("rename from with space/file1.el", true),
-            "with space/file1.el"
+            parse_file_meta_line("rename from with space/file1.el", true),
+            ("with space/file1.el".to_string(), FileEvent::Rename)
         );
     }
 
     #[test]
-    fn test_get_file_path_from_file_meta_line() {
+    fn test_parse_file_meta_line() {
         assert_eq!(
-            get_file_path_from_file_meta_line("--- src/delta.rs", false),
-            "src/delta.rs"
+            parse_file_meta_line("--- src/delta.rs", false),
+            ("src/delta.rs".to_string(), FileEvent::Change)
         );
         assert_eq!(
-            get_file_path_from_file_meta_line("+++ src/delta.rs", false),
-            "src/delta.rs"
+            parse_file_meta_line("+++ src/delta.rs", false),
+            ("src/delta.rs".to_string(), FileEvent::Change)
         );
     }
 

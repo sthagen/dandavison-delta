@@ -1,4 +1,5 @@
-[![Build Status](https://travis-ci.com/dandavison/delta.svg?branch=master)](https://travis-ci.com/dandavison/delta)
+[![CI](https://github.com/dandavison/delta/workflows/Continuous%20Integration/badge.svg)](https://github.com/dandavison/delta/actions)
+[![Coverage Status](https://coveralls.io/repos/github/dandavison/delta/badge.svg?branch=master)](https://coveralls.io/github/dandavison/delta?branch=master)
 [![Gitter](https://badges.gitter.im/dandavison-delta/community.svg)](https://gitter.im/dandavison-delta/community?utm_source=badge&utm_medium=badge&utm_campaign=pr-badge)
 
 ## A viewer for git and diff output
@@ -72,6 +73,8 @@ Contents
 
 * [Installation](#installation)
 * [Configuration](#configuration)
+   * [Git config files](#git-config-files)
+   * [Environment](#environment)
 * [Usage](#usage)
    * [Choosing colors (styles)](#choosing-colors-styles)
    * [Line numbers](#line-numbers)
@@ -183,7 +186,7 @@ In addition, delta handles traditional unified diff output.
 
 ## Installation
 
-You can download an executable for your system: [Linux](https://github.com/dandavison/delta/releases/download/0.4.4/delta-0.4.4-x86_64-unknown-linux-musl.tar.gz) | [MacOS](https://github.com/dandavison/delta/releases/download/0.4.4/delta-0.4.4-x86_64-apple-darwin.tar.gz) | [Windows](https://github.com/dandavison/delta/releases/download/0.4.4/delta-0.4.4-x86_64-pc-windows-gnu.zip) | [All](https://github.com/dandavison/delta/releases)
+You can download an executable for your system: [Linux](https://github.com/dandavison/delta/releases/download/0.4.4/delta-0.4.4-x86_64-unknown-linux-gnu.tar.gz) | [MacOS](https://github.com/dandavison/delta/releases/download/0.4.4/delta-0.4.4-x86_64-apple-darwin.tar.gz) | [Windows](https://github.com/dandavison/delta/releases/download/0.4.4/delta-0.4.4-x86_64-pc-windows-msvc.zip) | [All](https://github.com/dandavison/delta/releases)
 
 Alternatively, delta is available in the following package managers:
 
@@ -211,7 +214,7 @@ Alternatively, delta is available in the following package managers:
     <td><code>cargo install git-delta</code></td>
   </tr>
   <tr>
-    <td>Debian</td>
+    <td>Debian / Ubuntu</td>
     <td><br>.deb files are on the <a href="https://github.com/dandavison/delta/releases">releases</a> page and at <a href="https://github.com/barnumbirr/delta-debian/releases">barnumbirr/delta-debian</a><br>
     <code>dpkg -i file.deb</code></td>
   </tr>
@@ -222,6 +225,10 @@ Alternatively, delta is available in the following package managers:
   <tr>
     <td>FreeBSD</td>
     <td><code>pkg install git-delta</code></td>
+  </tr>
+  <tr>
+    <td>Gentoo</td>
+    <td><code>emerge dev-util/git-delta</code></td>
   </tr>
   <tr>
     <td>Homebrew</td>
@@ -253,7 +260,12 @@ Alternatively, delta is available in the following package managers:
   </tr>
 </table>
 
+Behind the scenes, delta uses `less` for paging. The version of `less` that comes with your operating system may be too old (currently, less v551 is a good choice). On MacOS, install `less` from Homebrew. For Windows, see [Using Delta on Windows](#using-delta-on-windows).
+
 ## Configuration
+
+
+#### Git config files
 
 Set delta to be git's pager in your `.gitconfig`. Delta has many options to alter colors and other details of the output. An example is
 ```gitconfig
@@ -287,6 +299,25 @@ delta a.txt b.txt
 
 diff -u a.txt b.txt | delta
 ```
+
+#### Environment
+
+##### a) Delta
+Delta respects the setting of some environment variables to derive the default pager to use. These are in descending order of priority :
+- `DELTA_PAGER`,
+- `BAT_PAGER` and
+- `PAGER`
+
+Hence if e.g. `$DELTA_PAGER` is unset, delta will use `$BAT_PAGER`, or `$PAGER` if that is unset, too. In environments without any of the three variable set, delta's fallback is `less`.
+
+##### b) Third party apps
+Note that `$BAT_PAGER` (as well as `$PAGER`) is _also_ used by the standalone `bat` app. Please see `bat(1)` for a [description](https://jlk.fjfi.cvut.cz/arch/manpages/man/community/bat/bat.1.en). However, `$BAT_THEME`, `$BAT_STYLE` and `$BAT_CONFIG_PATH` are **not** used by delta.
+
+The behavior of delta's default pager, less, can be controlled using the `LESS` environment variable. It may contain any of the `less` command line options and/or interactive less-commands (prefixed by a leading `+` sign) which will be executed every time right after less is launched. A real-life example for the latter would be `LESS='+Gg'`, causing the pager to briefly jump to the bottom of the buffer and back to the top right afterwards. The purpose of this example is to enable the full metadata display in less' status line, including the buffer contents length and relative position of the current view port, in percent and lines/characters.
+
+Less also uses a bunch of other environment variables as well as config files, although most of them are not relevant for use in combination with delta. For an in-depth explanation of these configuration options please see the `less(1)` [manual](https://jlk.fjfi.cvut.cz/arch/manpages/man/core/less/less.1.en).
+
+It should also be mentioned that, besides using the `core.pager` setting, you can also set `GIT_PAGER=delta` in your environment in order to define the default `git` pager. If set, this variable will take priority above the setting in the git config file(s).
 
 ## Usage
 
@@ -432,7 +463,7 @@ and you may then  need to quit tmux completely for it to take effect.
 
 ### Using Delta on Windows
 
-Delta works on Windows. However, the `less.exe` installed with git has some bugs: you will see incorrect colors and other problems. A patched version of `less.exe` and instructions for installing can be found [here](https://github.com/lzybkr/less/releases/tag/fix_windows_vt).
+Delta works on Windows. If you see incorrect colors and/or strange characters in Delta output, it is probably because there is an old version of `less.exe` on your system. On Windows, Git ships with its own version of `less.exe` for this reason, however there are still some bugs that affect delta. A patched version of `less.exe` and instructions for installing can be found [here](https://github.com/lzybkr/less/releases/tag/fix_windows_vt).
 
 
 ### Mouse scrolling

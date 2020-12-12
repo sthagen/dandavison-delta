@@ -6,7 +6,7 @@ use ansi_term::Color;
 use lazy_static::lazy_static;
 use syntect::highlighting::Color as SyntectColor;
 
-use crate::bat::terminal::to_ansi_color;
+use crate::bat_utils::terminal::to_ansi_color;
 use crate::syntect_color;
 
 pub fn parse_color(s: &str, true_color: bool) -> Option<Color> {
@@ -17,7 +17,7 @@ pub fn parse_color(s: &str, true_color: bool) -> Option<Color> {
         eprintln!("Invalid color or style attribute: {}", s);
         process::exit(1);
     };
-    let syntect_color = if s.starts_with("#") {
+    let syntect_color = if s.starts_with('#') {
         SyntectColor::from_str(s).unwrap_or_else(|_| die())
     } else {
         s.parse::<u8>()
@@ -84,7 +84,7 @@ lazy_static! {
 }
 
 pub fn ansi_16_color_name_to_number(name: &str) -> Option<u8> {
-    ANSI_16_COLORS.get(name).map(|n| *n)
+    ANSI_16_COLORS.get(name).copied()
 }
 
 fn ansi_16_color_number_to_name(n: u8) -> Option<&'static str> {

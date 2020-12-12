@@ -3,15 +3,14 @@ use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::path::PathBuf;
 
-use itertools;
 use lazy_static::lazy_static;
 use structopt::clap::AppSettings::{ColorAlways, ColoredHelp, DeriveDisplayOrder};
 use structopt::{clap, StructOpt};
 use syntect::highlighting::Theme as SyntaxTheme;
 use syntect::parsing::SyntaxSet;
 
-use crate::bat::assets::HighlightingAssets;
-use crate::bat::output::PagingMode;
+use crate::bat_utils::assets::HighlightingAssets;
+use crate::bat_utils::output::PagingMode;
 use crate::git_config::GitConfig;
 use crate::git_config_entry::GitConfigEntry;
 use crate::options;
@@ -34,7 +33,7 @@ given in a git config file, using the usual option names but without the initial
 is
 
 [delta]
-    number = true
+    line-numbers = true
     zero-style = dim syntax
 
 FEATURES
@@ -438,6 +437,10 @@ pub struct Opt {
     /// Text to display in front of a added file path.
     pub file_added_label: String,
 
+    #[structopt(long = "file-copied-label", default_value = "copied:")]
+    /// Text to display in front of a copied file path.
+    pub file_copied_label: String,
+
     #[structopt(long = "file-renamed-label", default_value = "renamed:")]
     /// Text to display in front of a renamed file path.
     pub file_renamed_label: String,
@@ -505,6 +508,15 @@ pub struct Opt {
     /// config, or else 'magenta reverse'.
     #[structopt(long = "whitespace-error-style", default_value = "auto auto")]
     pub whitespace_error_style: String,
+
+    #[structopt(long = "line-buffer-size", default_value = "32")]
+    /// Size of internal line buffer. Delta compares the added and removed versions of nearby lines
+    /// in order to detect and highlight changes at the level of individual words/tokens.
+    /// Therefore, nearby lines must be buffered internally before they are painted and emitted.
+    /// Increasing this value might improve highlighting of some large diff hunks. However, setting
+    /// this to a high value will adversely affect delta's performance when entire files are
+    /// added/removed.
+    pub line_buffer_size: usize,
 
     #[structopt(long = "minus-color")]
     /// Deprecated: use --minus-style='normal my_background_color'.
@@ -585,7 +597,7 @@ impl Default for Width {
     }
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum InspectRawLines {
     True,
     False,

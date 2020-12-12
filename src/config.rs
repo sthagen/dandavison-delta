@@ -8,7 +8,7 @@ use syntect::highlighting::Style as SyntectStyle;
 use syntect::highlighting::Theme as SyntaxTheme;
 use syntect::parsing::SyntaxSet;
 
-use crate::bat::output::PagingMode;
+use crate::bat_utils::output::PagingMode;
 use crate::cli;
 use crate::color;
 use crate::delta::State;
@@ -21,8 +21,10 @@ pub struct Config {
     pub available_terminal_width: usize,
     pub background_color_extends_to_terminal_width: bool,
     pub commit_style: Style,
+    pub color_only: bool,
     pub decorations_width: cli::Width,
     pub file_added_label: String,
+    pub file_copied_label: String,
     pub file_modified_label: String,
     pub file_removed_label: String,
     pub file_renamed_label: String,
@@ -42,7 +44,7 @@ pub struct Config {
     pub line_numbers_right_style: Style,
     pub line_numbers_show_first_line_number: bool,
     pub line_numbers_zero_style: Style,
-    pub max_buffered_lines: usize,
+    pub line_buffer_size: usize,
     pub max_line_distance: f64,
     pub max_line_distance_for_naively_paired_lines: f64,
     pub max_line_length: usize,
@@ -149,8 +151,10 @@ impl From<cli::Opt> for Config {
                 .computed
                 .background_color_extends_to_terminal_width,
             commit_style,
+            color_only: opt.color_only,
             decorations_width: opt.computed.decorations_width,
             file_added_label: opt.file_added_label,
+            file_copied_label: opt.file_copied_label,
             file_modified_label: opt.file_modified_label,
             file_removed_label: opt.file_removed_label,
             file_renamed_label: opt.file_renamed_label,
@@ -161,28 +165,23 @@ impl From<cli::Opt> for Config {
             hyperlinks_file_link_format: opt.hyperlinks_file_link_format,
             inspect_raw_lines: opt.computed.inspect_raw_lines,
             keep_plus_minus_markers: opt.keep_plus_minus_markers,
-            line_numbers: match opt.computed.line_numbers_mode {
-                cli::LineNumbersMode::Full => true,
-                _ => false,
-            },
+            line_numbers: (opt.computed.line_numbers_mode == cli::LineNumbersMode::Full),
             line_numbers_left_format: opt.line_numbers_left_format,
             line_numbers_left_style,
             line_numbers_minus_style,
             line_numbers_plus_style,
             line_numbers_right_format: opt.line_numbers_right_format,
             line_numbers_right_style,
-            line_numbers_show_first_line_number: match opt.computed.line_numbers_mode {
-                cli::LineNumbersMode::First => true,
-                _ => false,
-            },
+            line_numbers_show_first_line_number: (opt.computed.line_numbers_mode
+                == cli::LineNumbersMode::First),
             line_numbers_zero_style,
-            max_buffered_lines: 32,
+            line_buffer_size: opt.line_buffer_size,
             max_line_distance: opt.max_line_distance,
             max_line_distance_for_naively_paired_lines,
             max_line_length: opt.max_line_length,
             minus_emph_style,
             minus_empty_line_marker_style,
-            minus_file: opt.minus_file.map(|s| s.clone()),
+            minus_file: opt.minus_file,
             minus_non_emph_style,
             minus_style,
             navigate: opt.navigate,
@@ -191,7 +190,7 @@ impl From<cli::Opt> for Config {
             paging_mode: opt.computed.paging_mode,
             plus_emph_style,
             plus_empty_line_marker_style,
-            plus_file: opt.plus_file.map(|s| s.clone()),
+            plus_file: opt.plus_file,
             plus_non_emph_style,
             plus_style,
             git_minus_style,
@@ -211,8 +210,8 @@ impl From<cli::Opt> for Config {
     }
 }
 
-fn make_hunk_styles<'a>(
-    opt: &'a cli::Opt,
+fn make_hunk_styles(
+    opt: &cli::Opt,
 ) -> (
     Style,
     Style,
@@ -350,7 +349,7 @@ fn make_hunk_styles<'a>(
     )
 }
 
-fn make_line_number_styles<'a>(opt: &'a cli::Opt) -> (Style, Style, Style, Style, Style) {
+fn make_line_number_styles(opt: &cli::Opt) -> (Style, Style, Style, Style, Style) {
     let true_color = opt.computed.true_color;
     let line_numbers_left_style =
         Style::from_str(&opt.line_numbers_left_style, None, None, true_color, false);

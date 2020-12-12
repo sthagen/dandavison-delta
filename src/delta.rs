@@ -35,10 +35,7 @@ pub enum Source {
 
 impl State {
     fn is_in_hunk(&self) -> bool {
-        match *self {
-            State::HunkHeader | State::HunkZero | State::HunkMinus(_) | State::HunkPlus(_) => true,
-            _ => false,
-        }
+        matches!(*self, State::HunkHeader | State::HunkZero | State::HunkMinus(_) | State::HunkPlus(_))
     }
 }
 
@@ -65,6 +62,7 @@ where
     let mut painter = Painter::new(writer, config);
     let mut minus_file = "".to_string();
     let mut plus_file = "".to_string();
+    let mut file_event = parse::FileEvent::NoEvent;
     let mut state = State::Unknown;
     let mut source = Source::Unknown;
 
@@ -100,9 +98,15 @@ where
             state = State::FileMeta;
             handled_file_meta_header_line_file_pair = None;
         } else if (state == State::FileMeta || source == Source::DiffUnified)
-            && (line.starts_with("--- ") || line.starts_with("rename from "))
+            && (line.starts_with("--- ")
+                || line.starts_with("rename from ")
+                || line.starts_with("copy from "))
         {
-            minus_file = parse::get_file_path_from_file_meta_line(&line, source == Source::GitDiff);
+            let parsed_file_meta_line =
+                parse::parse_file_meta_line(&line, source == Source::GitDiff);
+            minus_file = parsed_file_meta_line.0;
+            file_event = parsed_file_meta_line.1;
+
             if source == Source::DiffUnified {
                 state = State::FileMeta;
                 painter.set_syntax(parse::get_file_extension_from_marker_line(&line));
@@ -111,14 +115,26 @@ where
                     &minus_file,
                 ));
             }
+            if config.color_only {
+                handle_generic_file_meta_header_line(&mut painter, &line, &raw_line, config)?;
+                continue;
+            }
         } else if (state == State::FileMeta || source == Source::DiffUnified)
-            && (line.starts_with("+++ ") || line.starts_with("rename to "))
+            && (line.starts_with("+++ ")
+                || line.starts_with("rename to ")
+                || line.starts_with("copy to "))
         {
-            plus_file = parse::get_file_path_from_file_meta_line(&line, source == Source::GitDiff);
+            let parsed_file_meta_line =
+                parse::parse_file_meta_line(&line, source == Source::GitDiff);
+            plus_file = parsed_file_meta_line.0;
             painter.set_syntax(parse::get_file_extension_from_file_meta_line_file_path(
                 &plus_file,
             ));
             current_file_pair = Some((minus_file.clone(), plus_file.clone()));
+            if config.color_only {
+                handle_generic_file_meta_header_line(&mut painter, &line, &raw_line, config)?;
+                continue;
+            }
             if should_handle(&State::FileMeta, config)
                 && handled_file_meta_header_line_file_pair != current_file_pair
             {
@@ -128,6 +144,7 @@ where
                     &minus_file,
                     &plus_file,
                     config,
+                    &file_event,
                     source == Source::DiffUnified,
                 )?;
                 handled_file_meta_header_line_file_pair = current_file_pair
@@ -138,6 +155,7 @@ where
             painter.set_highlighter();
             painter.emit()?;
             handle_hunk_header_line(&mut painter, &line, &raw_line, &plus_file, config)?;
+            painter.set_highlighter();
             continue;
         } else if source == Source::DiffUnified && line.starts_with("Only in ")
             || line.starts_with("Submodule ")
@@ -171,7 +189,8 @@ where
             continue;
         }
 
-        if state == State::FileMeta && should_handle(&State::FileMeta, config) {
+        if state == State::FileMeta && should_handle(&State::FileMeta, config) && !config.color_only
+        {
             // The file metadata section is 4 lines. Skip them under non-plain file-styles.
             continue;
         } else {
@@ -267,14 +286,8 @@ fn handle_commit_meta_header_line(
     };
     let (formatted_line, formatted_raw_line) = if config.hyperlinks {
         (
-            Cow::from(
-                features::hyperlinks::format_commit_line_with_osc8_commit_hyperlink(line, config),
-            ),
-            Cow::from(
-                features::hyperlinks::format_commit_line_with_osc8_commit_hyperlink(
-                    raw_line, config,
-                ),
-            ),
+            features::hyperlinks::format_commit_line_with_osc8_commit_hyperlink(line, config),
+            features::hyperlinks::format_commit_line_with_osc8_commit_hyperlink(raw_line, config),
         )
     } else {
         (Cow::from(line), Cow::from(raw_line))
@@ -297,10 +310,11 @@ fn handle_file_meta_header_line(
     minus_file: &str,
     plus_file: &str,
     config: &Config,
+    file_event: &parse::FileEvent,
     comparing: bool,
 ) -> std::io::Result<()> {
     let line = parse::get_file_change_description_from_file_paths(
-        minus_file, plus_file, comparing, config,
+        minus_file, plus_file, comparing, file_event, config,
     );
     // FIXME: no support for 'raw'
     handle_generic_file_meta_header_line(painter, &line, &line, config)
@@ -313,7 +327,7 @@ fn handle_generic_file_meta_header_line(
     raw_line: &str,
     config: &Config,
 ) -> std::io::Result<()> {
-    if config.file_style.is_omitted {
+    if config.file_style.is_omitted && !config.color_only {
         return Ok(());
     }
     let decoration_ansi_term_style;
@@ -356,7 +370,9 @@ fn handle_generic_file_meta_header_line(
             draw::write_no_decoration
         }
     };
-    writeln!(painter.writer)?;
+    if !config.color_only {
+        writeln!(painter.writer)?;
+    }
     draw_fn(
         painter.writer,
         &format!("{}{}", line, if pad { " " } else { "" }),
@@ -417,7 +433,7 @@ fn handle_hunk_header_line(
     };
     let (raw_code_fragment, line_numbers) = parse::parse_hunk_header(&line);
     // Emit the hunk header, with any requested decoration
-    if config.hunk_header_style.is_raw {
+    if config.hunk_header_style.is_raw || config.color_only {
         if config.hunk_header_style.decoration_style != DecorationStyle::NoDecoration {
             writeln!(painter.writer)?;
         }
@@ -433,7 +449,7 @@ fn handle_hunk_header_line(
         writeln!(painter.writer)?;
     } else {
         let line = match painter.prepare(&raw_code_fragment, false) {
-            s if s.len() > 0 => format!("{} ", s),
+            s if !s.is_empty() => format!("{} ", s),
             s => s,
         };
         writeln!(painter.writer)?;
@@ -452,7 +468,7 @@ fn handle_hunk_header_line(
                 &mut painter.output_buffer,
                 config,
                 &mut None,
-                "",
+                None,
                 None,
                 Some(false),
             );
@@ -474,7 +490,12 @@ fn handle_hunk_header_line(
         painter
             .line_numbers_data
             .initialize_hunk(line_numbers, plus_file.to_string());
-    } else if config.line_numbers_show_first_line_number && !config.hunk_header_style.is_raw {
+    } else if config.line_numbers_show_first_line_number
+        && !config.hunk_header_style.is_raw
+        && !config.color_only
+    {
+        // With raw mode or color-only mode,
+        // we should prevent the output from creating new line for printing line number
         let plus_line_number = line_numbers[line_numbers.len() - 1].0;
         let formatted_plus_line_number = if config.hyperlinks {
             features::hyperlinks::format_osc8_file_hyperlink(
@@ -514,8 +535,8 @@ fn handle_hunk_line(
     // Don't let the line buffers become arbitrarily large -- if we
     // were to allow that, then for a large deleted/added file we
     // would process the entire file before painting anything.
-    if painter.minus_lines.len() > config.max_buffered_lines
-        || painter.plus_lines.len() > config.max_buffered_lines
+    if painter.minus_lines.len() > config.line_buffer_size
+        || painter.plus_lines.len() > config.line_buffer_size
     {
         painter.paint_buffered_minus_and_plus_lines();
     }
@@ -570,7 +591,7 @@ fn handle_hunk_line(
             painter
                 .output_buffer
                 .push_str(&painter.expand_tabs(raw_line.graphemes(true)));
-            painter.output_buffer.push_str("\n");
+            painter.output_buffer.push('\n');
             State::HunkZero
         }
     }

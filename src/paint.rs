@@ -1,8 +1,5 @@
-use lazy_static::lazy_static;
-use regex::Regex;
 use std::io::Write;
 
-use ansi_term;
 use itertools::Itertools;
 use syntect::easy::HighlightLines;
 use syntect::highlighting::Style as SyntectStyle;
@@ -65,11 +62,9 @@ impl<'a> Painter<'a> {
                 return syntax;
             }
         }
-        return syntax_set
+        syntax_set
             .find_syntax_by_extension("txt")
-            .unwrap_or_else(|| {
-                delta_unreachable("Failed to find any language syntax definitions.")
-            });
+            .unwrap_or_else(|| delta_unreachable("Failed to find any language syntax definitions."))
     }
 
     pub fn set_highlighter(&mut self) {
@@ -104,7 +99,14 @@ impl<'a> Painter<'a> {
     /// Remove the initial +/- character of a line that will be emitted unchanged, including any
     /// ANSI escape sequences.
     pub fn prepare_raw_line(&self, line: &str) -> String {
-        ansi::ansi_preserving_slice(&self.expand_tabs(line.graphemes(true)), 1)
+        ansi::ansi_preserving_slice(
+            &self.expand_tabs(line.graphemes(true)),
+            if self.config.keep_plus_minus_markers {
+                0
+            } else {
+                1
+            },
+        )
     }
 
     /// Expand tabs as spaces.
@@ -162,9 +164,9 @@ impl<'a> Painter<'a> {
                     self.config,
                     &mut Some(&mut self.line_numbers_data),
                     if self.config.keep_plus_minus_markers {
-                        "-"
+                        Some(self.config.minus_style.paint("-"))
                     } else {
-                        ""
+                        None
                     },
                     Some(self.config.minus_empty_line_marker_style),
                     None,
@@ -179,9 +181,9 @@ impl<'a> Painter<'a> {
                     self.config,
                     &mut Some(&mut self.line_numbers_data),
                     if self.config.keep_plus_minus_markers {
-                        "+"
+                        Some(self.config.plus_style.paint("+"))
                     } else {
-                        ""
+                        None
                     },
                     Some(self.config.plus_empty_line_marker_style),
                     None,
@@ -194,10 +196,10 @@ impl<'a> Painter<'a> {
 
     pub fn paint_zero_line(&mut self, line: &str) {
         let state = State::HunkZero;
-        let prefix = if self.config.keep_plus_minus_markers && !line.is_empty() {
-            &line[..1]
+        let painted_prefix = if self.config.keep_plus_minus_markers && !line.is_empty() {
+            Some(self.config.zero_style.paint(&line[..1]))
         } else {
-            ""
+            None
         };
         let lines = vec![(self.prepare(line, true), state.clone())];
         let syntax_style_sections = Painter::get_syntax_style_sections_for_lines(
@@ -216,7 +218,7 @@ impl<'a> Painter<'a> {
                 &mut self.output_buffer,
                 self.config,
                 &mut Some(&mut self.line_numbers_data),
-                prefix,
+                painted_prefix,
                 None,
             );
         } else {
@@ -227,7 +229,7 @@ impl<'a> Painter<'a> {
                 &mut self.output_buffer,
                 self.config,
                 &mut Some(&mut self.line_numbers_data),
-                prefix,
+                painted_prefix,
                 None,
                 None,
             );
@@ -236,6 +238,7 @@ impl<'a> Painter<'a> {
 
     /// Superimpose background styles and foreground syntax
     /// highlighting styles, and write colored lines to output buffer.
+    #[allow(clippy::too_many_arguments)]
     pub fn paint_lines(
         syntax_style_sections: Vec<Vec<(SyntectStyle, &str)>>,
         diff_style_sections: Vec<Vec<(Style, &str)>>,
@@ -243,14 +246,13 @@ impl<'a> Painter<'a> {
         output_buffer: &mut String,
         config: &config::Config,
         line_numbers_data: &mut Option<&mut line_numbers::LineNumbersData>,
-        prefix: &str,
+        painted_prefix: Option<ansi_term::ANSIString>,
         empty_line_style: Option<Style>, // a style with background color to highlight an empty line
         background_color_extends_to_terminal_width: Option<bool>,
     ) {
         // There's some unfortunate hackery going on here for two reasons:
         //
-        // 1. The prefix needs to be injected into the output stream. We paint
-        //    this with whatever style the line starts with.
+        // 1. The prefix needs to be injected into the output stream.
         //
         // 2. We must ensure that we fill rightwards with the appropriate
         //    non-emph background color. In that case we don't use the last
@@ -266,7 +268,7 @@ impl<'a> Painter<'a> {
                 state,
                 line_numbers_data,
                 None,
-                prefix,
+                painted_prefix.clone(),
                 config,
             );
             let (should_right_fill_background_color, fill_style) =
@@ -288,14 +290,14 @@ impl<'a> Painter<'a> {
                 }
             };
             output_buffer.push_str(&line);
-            output_buffer.push_str("\n");
+            output_buffer.push('\n');
         }
     }
 
     /// Determine whether the terminal should fill the line rightwards with a background color, and
     /// the style for doing so.
     pub fn get_should_right_fill_background_color_and_fill_style(
-        diff_sections: &Vec<(Style, &str)>,
+        diff_sections: &[(Style, &str)],
         state: &State,
         background_color_extends_to_terminal_width: Option<bool>,
         config: &config::Config,
@@ -372,12 +374,12 @@ impl<'a> Painter<'a> {
 
     /// Return painted line (maybe prefixed with line numbers field) and an is_empty? boolean.
     pub fn paint_line(
-        syntax_sections: &Vec<(SyntectStyle, &str)>,
-        diff_sections: &Vec<(Style, &str)>,
+        syntax_sections: &[(SyntectStyle, &str)],
+        diff_sections: &[(Style, &str)],
         state: &State,
         line_numbers_data: &mut Option<&mut line_numbers::LineNumbersData>,
         side_by_side_panel: Option<side_by_side::PanelSide>,
-        prefix: &str,
+        painted_prefix: Option<ansi_term::ANSIString>,
         config: &config::Config,
     ) -> (String, bool) {
         let output_line_numbers = config.line_numbers && line_numbers_data.is_some();
@@ -414,10 +416,10 @@ impl<'a> Painter<'a> {
             config.null_syntect_style,
         ) {
             if !handled_prefix {
-                if prefix != "" {
-                    ansi_strings.push(section_style.paint(prefix));
+                if let Some(painted_prefix) = painted_prefix.clone() {
+                    ansi_strings.push(painted_prefix);
                 }
-                if text.len() > 0 {
+                if !text.is_empty() {
                     text.remove(0);
                 }
                 handled_prefix = true;
@@ -461,7 +463,7 @@ impl<'a> Painter<'a> {
     }
 
     pub fn get_syntax_style_sections_for_lines<'s>(
-        lines: &'s Vec<(String, State)>,
+        lines: &'s [(String, State)],
         state: &State,
         highlighter: &mut HighlightLines,
         config: &config::Config,
@@ -483,9 +485,10 @@ impl<'a> Painter<'a> {
     }
 
     /// Set background styles to represent diff for minus and plus lines in buffer.
+    #[allow(clippy::type_complexity)]
     fn get_diff_style_sections<'b>(
-        minus_lines: &'b Vec<(String, State)>,
-        plus_lines: &'b Vec<(String, State)>,
+        minus_lines: &'b [(String, State)],
+        plus_lines: &'b [(String, State)],
         config: &config::Config,
     ) -> (
         Vec<Vec<(Style, &'b str)>>,
@@ -571,37 +574,41 @@ impl<'a> Painter<'a> {
 
 // edits::annotate doesn't return "coalesced" annotations (see comment there), so we can't assume
 // that `sections.len() > 1 <=> (multiple styles)`.
-fn style_sections_contain_more_than_one_style(sections: &Vec<(Style, &str)>) -> bool {
+fn style_sections_contain_more_than_one_style(sections: &[(Style, &str)]) -> bool {
     if sections.len() > 1 {
         let (first_style, _) = sections[0];
-        sections
-            .iter()
-            .filter(|(style, _)| *style != first_style)
-            .next()
-            .is_some()
+        sections.iter().any(|(style, _)| *style != first_style)
     } else {
         false
     }
 }
 
-lazy_static! {
-    static ref NON_WHITESPACE_REGEX: Regex = Regex::new(r"\S").unwrap();
-}
-
 /// True iff the line represented by `sections` constitutes a whitespace error.
+// Note that a space is always present as the first character in the line (it was put there as a
+// replacement for the leading +/- marker; see paint::prepare()). A line is a whitespace error iff,
+// beyond the initial space character, (a) there are more characters and (b) they are all
+// whitespace characters.
 // TODO: Git recognizes blank lines at end of file (blank-at-eof) as a whitespace error but delta
 // does not yet.
 // https://git-scm.com/docs/git-config#Documentation/git-config.txt-corewhitespace
-fn is_whitespace_error(sections: &Vec<(Style, &str)>) -> bool {
-    !sections
-        .iter()
-        .any(|(_, s)| NON_WHITESPACE_REGEX.is_match(s))
+fn is_whitespace_error(sections: &[(Style, &str)]) -> bool {
+    let mut any_chars = false;
+    for c in sections.iter().flat_map(|(_, s)| s.chars()).skip(1) {
+        if c == '\n' {
+            return any_chars;
+        } else if c != ' ' && c != '\t' {
+            return false;
+        } else {
+            any_chars = true;
+        }
+    }
+    false
 }
 
 mod superimpose_style_sections {
     use syntect::highlighting::Style as SyntectStyle;
 
-    use crate::bat::terminal::to_ansi_color;
+    use crate::bat_utils::terminal::to_ansi_color;
     use crate::style::Style;
 
     pub fn superimpose_style_sections(
@@ -635,6 +642,7 @@ mod superimpose_style_sections {
         exploded
     }
 
+    #[allow(clippy::type_complexity)]
     fn superimpose(
         style_section_pairs: Vec<(&(SyntectStyle, char), (Style, char))>,
     ) -> Vec<((SyntectStyle, Style), char)> {
@@ -685,7 +693,7 @@ mod superimpose_style_sections {
             }
 
             // TODO: This is not the ideal location for the following code.
-            if current_string.ends_with("\n") {
+            if current_string.ends_with('\n') {
                 // Remove the terminating newline whose presence was necessary for the syntax
                 // highlighter to work correctly.
                 current_string.truncate(current_string.len() - 1);
