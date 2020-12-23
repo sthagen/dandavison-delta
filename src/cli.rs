@@ -286,7 +286,7 @@ pub struct Opt {
     pub color_only: bool,
 
     ////////////////////////////////////////////////////////////////////////////////////////////
-    #[structopt(long = "features", default_value = "")]
+    #[structopt(long = "features", default_value = "", env = "DELTA_FEATURES")]
     /// Name of delta features to use (space-separated). A feature is a named collection of delta
     /// options in ~/.gitconfig. See FEATURES section.
     pub features: String,
@@ -365,7 +365,8 @@ pub struct Opt {
 
     #[structopt(long = "hunk-header-style", default_value = "syntax")]
     /// Style (foreground, background, attributes) for the hunk-header. See STYLES section. The
-    /// style 'omit' can be used to remove the hunk header section from the output.
+    /// special attribute 'file' can be used to include the file path in the hunk header. The style
+    /// 'omit' can be used to remove the hunk header section from the output.
     pub hunk_header_style: String,
 
     #[structopt(long = "hunk-header-decoration-style", default_value = "blue box")]
