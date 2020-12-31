@@ -197,7 +197,7 @@ In addition, delta handles traditional unified diff output.
 
 ## Installation
 
-You can download an executable for your system: [Linux](https://github.com/dandavison/delta/releases/download/0.4.4/delta-0.4.4-x86_64-unknown-linux-gnu.tar.gz) | [MacOS](https://github.com/dandavison/delta/releases/download/0.4.4/delta-0.4.4-x86_64-apple-darwin.tar.gz) | [Windows](https://github.com/dandavison/delta/releases/download/0.4.4/delta-0.4.4-x86_64-pc-windows-msvc.zip) | [All](https://github.com/dandavison/delta/releases)
+You can download an executable for your system: [Linux](https://github.com/dandavison/delta/releases/download/0.5.0/delta-0.5.0-x86_64-unknown-linux-gnu.tar.gz) | [MacOS (recent versions)](https://github.com/dandavison/delta/releases/download/0.5.0/delta-0.5.0-x86_64-apple-darwin.tar.gz) | [Windows](https://github.com/dandavison/delta/releases/download/0.5.0/delta-0.5.0-x86_64-pc-windows-msvc.zip) | [All](https://github.com/dandavison/delta/releases)
 
 Alternatively, delta is available in the following package managers:
 
@@ -270,6 +270,10 @@ Alternatively, delta is available in the following package managers:
     <td><code>scoop install delta</code></td>
   </tr>
 </table>
+
+Users of older MacOS versions (e.g. 10.11 El Capitan) should install using Homebrew, Cargo, or MacPorts: the binaries on the release page will not work.
+
+See [repology.org/git-delta](https://repology.org/project/git-delta/versions) for the current version in each package repository.
 
 Behind the scenes, delta uses `less` for paging. The version of `less` that comes with your operating system may be too old (currently, less v551 is a good choice). On MacOS, install `less` from Homebrew. For Windows, see [Using Delta on Windows](#using-delta-on-windows).
 
@@ -474,7 +478,7 @@ and you may then  need to quit tmux completely for it to take effect.
 
 ### Using Delta on Windows
 
-Delta works on Windows. If you see incorrect colors and/or strange characters in Delta output, it is probably because there is an old version of `less.exe` on your system. On Windows, Git ships with its own version of `less.exe` for this reason, however there are still some bugs that affect delta. A patched version of `less.exe` and instructions for installing can be found [here](https://github.com/lzybkr/less/releases/tag/fix_windows_vt).
+Delta works on Windows. However, it is essential to use a recent version of `less.exe`: you can download one from https://github.com/jftuga/less-Windows/releases/latest. If you see incorrect colors and/or strange characters in Delta output, then it is probably because Delta is picking up an old version of `less.exe` on your system.
 
 
 ### Mouse scrolling
@@ -596,7 +600,7 @@ and use the executable found at `./target/release/delta`.
 ## Full --help output
 
 ```
-delta 0.4.5 (dev)
+delta 0.5.0
 A viewer for git and diff output
 
 USAGE:
@@ -647,7 +651,7 @@ FLAGS:
 OPTIONS:
         --features <features>
             Name of delta features to use (space-separated). A feature is a named collection of delta options in
-            ~/.gitconfig. See FEATURES section [default: ]
+            ~/.gitconfig. See FEATURES section [env: DELTA_FEATURES=]  [default: ]
         --syntax-theme <syntax-theme>
             The code syntax-highlighting theme to use. Use --show-syntax-themes to demo available themes. If the syntax-
             highlighting theme is not set using this option, it will be taken from the BAT_THEME environment
@@ -694,8 +698,11 @@ OPTIONS:
             application to handle the custom "file-line" URL scheme by opening the file in your editor/IDE at the
             indicated line number. See https://github.com/dandavison/open-in-editor for an example [default: file://{path}]
         --hunk-header-style <hunk-header-style>
-            Style (foreground, background, attributes) for the hunk-header. See STYLES section. The style 'omit' can be
-            used to remove the hunk header section from the output [default: syntax]
+            Style (foreground, background, attributes) for the hunk-header. See STYLES section. Special attributes
+            'file' and 'line-number' can be used to include the file path, and number of first hunk line, in the hunk
+            header. If included in the hunk header, 'file' and 'line-number' are styled according to 'file-style' and
+            'hunk-header-decoration-style' respectively. The style 'omit' can be used to remove the hunk header section
+            from the output [default: line-number syntax]
         --hunk-header-decoration-style <hunk-header-decoration-style>
             Style (foreground, background, attributes) for the hunk-header decoration. See STYLES section. The style
             string should contain one of the special attributes 'box', 'ul' (underline), 'ol' (overline), or the
@@ -739,6 +746,9 @@ OPTIONS:
         --file-added-label <file-added-label>
             Text to display in front of a added file path [default: added:]
 
+        --file-copied-label <file-copied-label>
+            Text to display in front of a copied file path [default: copied:]
+
         --file-renamed-label <file-renamed-label>
             Text to display in front of a renamed file path [default: renamed:]
 
@@ -774,6 +784,12 @@ OPTIONS:
         --whitespace-error-style <whitespace-error-style>
             Style for whitespace errors. Defaults to color.diff.whitespace if that is set in git config, or else
             'magenta reverse' [default: auto auto]
+        --line-buffer-size <line-buffer-size>
+            Size of internal line buffer. Delta compares the added and removed versions of nearby lines in order to
+            detect and highlight changes at the level of individual words/tokens. Therefore, nearby lines must be
+            buffered internally before they are painted and emitted. Increasing this value might improve highlighting of
+            some large diff hunks. However, setting this to a high value will adversely affect delta's performance when
+            entire files are added/removed [default: 32]
         --minus-color <deprecated-minus-background-color>
             Deprecated: use --minus-style='normal my_background_color'
 
@@ -815,7 +831,7 @@ given in a git config file, using the usual option names but without the initial
 is
 
 [delta]
-    number = true
+    line-numbers = true
     zero-style = dim syntax
 
 FEATURES

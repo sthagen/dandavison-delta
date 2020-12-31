@@ -18,6 +18,7 @@ mod features;
 mod format;
 mod git_config;
 mod git_config_entry;
+mod hunk_header;
 mod options;
 mod paint;
 mod parse;
@@ -51,19 +52,20 @@ pub mod errors {
 }
 
 #[cfg(not(tarpaulin_include))]
-fn main() -> std::io::Result<()> {
+/// `Ok` of the `Result` contains with the exit code value
+fn run_app() -> std::io::Result<i32> {
     let assets = HighlightingAssets::new();
     let opt = cli::Opt::from_args_and_git_config(&mut git_config::GitConfig::try_create(), assets);
 
     if opt.list_languages {
         list_languages()?;
-        process::exit(0);
+        return Ok(0);
     } else if opt.list_syntax_themes {
         list_syntax_themes()?;
-        process::exit(0);
+        return Ok(0);
     } else if opt.show_syntax_themes {
         show_syntax_themes()?;
-        process::exit(0);
+        return Ok(0);
     }
 
     let _show_config = opt.show_config;
@@ -73,28 +75,36 @@ fn main() -> std::io::Result<()> {
         let stdout = io::stdout();
         let mut stdout = stdout.lock();
         show_config(&config, &mut stdout)?;
-        process::exit(0);
+        return Ok(0);
     }
 
     let mut output_type = OutputType::from_mode(config.paging_mode, None, &config).unwrap();
     let mut writer = output_type.handle().unwrap();
 
     if atty::is(atty::Stream::Stdin) {
-        process::exit(diff(
+        let exit_code = diff(
             config.minus_file.as_ref(),
             config.plus_file.as_ref(),
             &config,
             &mut writer,
-        ));
+        );
+        return Ok(exit_code);
     }
 
     if let Err(error) = delta(io::stdin().lock().byte_lines(), &mut writer, &config) {
         match error.kind() {
-            ErrorKind::BrokenPipe => process::exit(0),
+            ErrorKind::BrokenPipe => return Ok(0),
             _ => eprintln!("{}", error),
         }
     };
-    Ok(())
+    Ok(0)
+}
+
+#[cfg(not(tarpaulin_include))]
+fn main() -> std::io::Result<()> {
+    let exit_code = run_app()?;
+    // when you call process::exit, no destructors are called, so we want to do it only once, here
+    process::exit(exit_code);
 }
 
 /// Run `diff -u` on the files provided on the command line and display the output.
@@ -426,6 +436,7 @@ pub fn _list_syntax_themes_for_machines(writer: &mut dyn Write) -> std::io::Resu
 #[cfg(test)]
 mod main_tests {
     use super::*;
+    use std::fs;
     use std::io::{Cursor, Seek, SeekFrom};
 
     use crate::ansi;
@@ -487,55 +498,53 @@ mod main_tests {
     #[test]
     #[cfg_attr(target_os = "windows", ignore)]
     fn test_diff_same_empty_file() {
-        let config = integration_test_utils::make_config_from_args(&[]);
-        let mut writer = Cursor::new(vec![]);
-        let exit_code = diff(
-            Some(&PathBuf::from("/dev/null")),
-            Some(&PathBuf::from("/dev/null")),
-            &config,
-            &mut writer,
-        );
-        assert_eq!(exit_code, 0);
-        let mut s = String::new();
-        writer.seek(SeekFrom::Start(0)).unwrap();
-        writer.read_to_string(&mut s).unwrap();
-        assert!(s.is_empty());
+        _do_diff_test("/dev/null", "/dev/null", false, None);
     }
 
     #[test]
     #[cfg_attr(target_os = "windows", ignore)]
     fn test_diff_same_non_empty_file() {
-        let config = integration_test_utils::make_config_from_args(&[]);
-        let mut writer = Cursor::new(vec![]);
-        let exit_code = diff(
-            Some(&PathBuf::from("/etc/passwd")),
-            Some(&PathBuf::from("/etc/passwd")),
-            &config,
-            &mut writer,
-        );
-        assert_eq!(exit_code, 0);
-        let mut s = String::new();
-        writer.seek(SeekFrom::Start(0)).unwrap();
-        writer.read_to_string(&mut s).unwrap();
-        assert!(s.is_empty());
+        _do_diff_test("/etc/passwd", "/etc/passwd", false, None);
     }
 
     #[test]
     #[cfg_attr(target_os = "windows", ignore)]
-    fn test_diff_differing_files() {
+    fn test_diff_empty_vs_non_empty_file() {
+        _do_diff_test("/dev/null", "/etc/passwd", true, Some("/etc/passwd"));
+    }
+
+    #[test]
+    #[cfg_attr(target_os = "windows", ignore)]
+    fn test_diff_two_non_empty_files() {
+        _do_diff_test("/etc/group", "/etc/passwd", true, None);
+    }
+
+    fn _do_diff_test(file_a: &str, file_b: &str, expect_diff: bool, expected_diff: Option<&str>) {
         let config = integration_test_utils::make_config_from_args(&[]);
         let mut writer = Cursor::new(vec![]);
         let exit_code = diff(
-            Some(&PathBuf::from("/dev/null")),
-            Some(&PathBuf::from("/etc/passwd")),
+            Some(&PathBuf::from(file_a)),
+            Some(&PathBuf::from(file_b)),
             &config,
             &mut writer,
         );
-        assert_eq!(exit_code, 1);
+        let s = ansi::strip_ansi_codes(&_read_to_string(&mut writer));
+        if expect_diff {
+            assert_eq!(exit_code, 1);
+            assert!(s.contains(&format!("comparing: {} ⟶   {}\n", file_a, file_b)));
+            if let Some(expected_diff) = expected_diff {
+                assert!(s.contains(&fs::read_to_string(expected_diff).unwrap()));
+            }
+        } else {
+            assert_eq!(exit_code, 0);
+            assert!(s.is_empty());
+        }
+    }
+
+    fn _read_to_string(cursor: &mut Cursor<Vec<u8>>) -> String {
         let mut s = String::new();
-        writer.seek(SeekFrom::Start(0)).unwrap();
-        writer.read_to_string(&mut s).unwrap();
-        let s = ansi::strip_ansi_codes(&s);
-        assert!(s.contains("comparing: /dev/null ⟶   /etc/passwd\n"));
+        cursor.seek(SeekFrom::Start(0)).unwrap();
+        cursor.read_to_string(&mut s).unwrap();
+        s
     }
 }
