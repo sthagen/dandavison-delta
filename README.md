@@ -73,6 +73,8 @@ The most convenient way to configure delta is with a `[delta]` section in `~/.gi
 
 </sub>
 
+Use `delta --help` to see all the available options.
+
 To quickly change delta configuration on-the-fly, use the `git config --global` command. For example
 
 ```bash
@@ -197,7 +199,7 @@ In addition, delta handles traditional unified diff output.
 
 ## Installation
 
-You can download an executable for your system: [Linux](https://github.com/dandavison/delta/releases/download/0.5.0/delta-0.5.0-x86_64-unknown-linux-gnu.tar.gz) | [MacOS (recent versions)](https://github.com/dandavison/delta/releases/download/0.5.0/delta-0.5.0-x86_64-apple-darwin.tar.gz) | [Windows](https://github.com/dandavison/delta/releases/download/0.5.0/delta-0.5.0-x86_64-pc-windows-msvc.zip) | [All](https://github.com/dandavison/delta/releases)
+You can download an executable for your system: [Linux](https://github.com/dandavison/delta/releases/download/0.5.1/delta-0.5.1-x86_64-unknown-linux-gnu.tar.gz) | [MacOS (recent versions)](https://github.com/dandavison/delta/releases/download/0.5.1/delta-0.5.1-x86_64-apple-darwin.tar.gz) | [Windows](https://github.com/dandavison/delta/releases/download/0.5.1/delta-0.5.1-x86_64-pc-windows-msvc.zip) | [All](https://github.com/dandavison/delta/releases)
 
 Alternatively, delta is available in the following package managers:
 
@@ -282,7 +284,7 @@ Behind the scenes, delta uses `less` for paging. The version of `less` that come
 
 #### Git config files
 
-Set delta to be git's pager in your `.gitconfig`. Delta has many options to alter colors and other details of the output. An example is
+Set delta to be git's pager in your `.gitconfig`. Delta has many options to alter colors and other details of the output; `delta --help` shows them all. An example is
 ```gitconfig
 [core]
     pager = delta
@@ -483,8 +485,11 @@ Delta works on Windows. However, it is essential to use a recent version of `les
 
 ### Mouse scrolling
 
-If mouse scrolling isn't working correctly, try setting your `BAT_PAGER` environment variable to (at least) `less -R` .
-See [issue #58](https://github.com/dandavison/delta/issues/58) and [bat README / "Using a different pager"](https://github.com/sharkdp/bat#using-a-different-pager).
+If mouse scrolling isn't working correctly, ensure that you have the most recent version of `less`.
+* For Windows you can download from https://github.com/jftuga/less-Windows/releases/latest
+* For Mac you can install `brew install less; brew link less`
+
+Alternatively try setting your `DELTA_PAGER` environment variable to (at least) `less -R`. See [issue #58](https://github.com/dandavison/delta/issues/58). See also [bat README / "Using a different pager"](https://github.com/sharkdp/bat#using-a-different-pager), since the `DELTA_PAGER` environment variable functions very similarly for delta.
 
 
 ### Using Delta with Magit
@@ -600,7 +605,7 @@ and use the executable found at `./target/release/delta`.
 ## Full --help output
 
 ```
-delta 0.5.0
+delta 0.5.1
 A viewer for git and diff output
 
 USAGE:
@@ -700,9 +705,16 @@ OPTIONS:
         --hunk-header-style <hunk-header-style>
             Style (foreground, background, attributes) for the hunk-header. See STYLES section. Special attributes
             'file' and 'line-number' can be used to include the file path, and number of first hunk line, in the hunk
-            header. If included in the hunk header, 'file' and 'line-number' are styled according to 'file-style' and
-            'hunk-header-decoration-style' respectively. The style 'omit' can be used to remove the hunk header section
-            from the output [default: line-number syntax]
+            header. The style 'omit' can be used to remove the hunk header section from the output [default: line-
+            number syntax]
+        --hunk-header-file-style <hunk-header-file-style>
+            Style (foreground, background, attributes) for the file path part of the hunk-header. See STYLES section.
+            The file path will only be displayed if hunk-header-style contains the 'file' special attribute [default:
+            blue]
+        --hunk-header-line-number-style <hunk-header-line-number-style>
+            Style (foreground, background, attributes) for the line number part of the hunk-header. See STYLES section.
+            The line number will only be displayed if hunk-header-style contains the 'line-number' special attribute
+            [default: blue]
         --hunk-header-decoration-style <hunk-header-decoration-style>
             Style (foreground, background, attributes) for the hunk-header decoration. See STYLES section. The style
             string should contain one of the special attributes 'box', 'ul' (underline), 'ol' (overline), or the

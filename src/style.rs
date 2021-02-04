@@ -73,19 +73,6 @@ impl Style {
         }
     }
 
-    pub fn decoration_ansi_term_style(&self) -> Option<ansi_term::Style> {
-        match self.decoration_style {
-            DecorationStyle::Box(style) => Some(style),
-            DecorationStyle::Underline(style) => Some(style),
-            DecorationStyle::Overline(style) => Some(style),
-            DecorationStyle::UnderOverline(style) => Some(style),
-            DecorationStyle::BoxWithUnderline(style) => Some(style),
-            DecorationStyle::BoxWithOverline(style) => Some(style),
-            DecorationStyle::BoxWithUnderOverline(style) => Some(style),
-            DecorationStyle::NoDecoration => None,
-        }
-    }
-
     pub fn is_applied_to(&self, s: &str) -> bool {
         match ansi::parse_first_style(s) {
             Some(parsed_style) => ansi_term_style_equality(parsed_style, self.ansi_term_style),
@@ -179,17 +166,17 @@ fn ansi_term_color_equality(a: Option<ansi_term::Color>, b: Option<ansi_term::Co
 }
 
 fn ansi_term_16_color_equality(a: ansi_term::Color, b: ansi_term::Color) -> bool {
-    match (a, b) {
-        (ansi_term::Color::Fixed(0), ansi_term::Color::Black) => true,
-        (ansi_term::Color::Fixed(1), ansi_term::Color::Red) => true,
-        (ansi_term::Color::Fixed(2), ansi_term::Color::Green) => true,
-        (ansi_term::Color::Fixed(3), ansi_term::Color::Yellow) => true,
-        (ansi_term::Color::Fixed(4), ansi_term::Color::Blue) => true,
-        (ansi_term::Color::Fixed(5), ansi_term::Color::Purple) => true,
-        (ansi_term::Color::Fixed(6), ansi_term::Color::Cyan) => true,
-        (ansi_term::Color::Fixed(7), ansi_term::Color::White) => true,
-        _ => false,
-    }
+    matches!(
+        (a, b),
+        (ansi_term::Color::Fixed(0), ansi_term::Color::Black)
+            | (ansi_term::Color::Fixed(1), ansi_term::Color::Red)
+            | (ansi_term::Color::Fixed(2), ansi_term::Color::Green)
+            | (ansi_term::Color::Fixed(3), ansi_term::Color::Yellow)
+            | (ansi_term::Color::Fixed(4), ansi_term::Color::Blue)
+            | (ansi_term::Color::Fixed(5), ansi_term::Color::Purple)
+            | (ansi_term::Color::Fixed(6), ansi_term::Color::Cyan)
+            | (ansi_term::Color::Fixed(7), ansi_term::Color::White)
+    )
 }
 
 lazy_static! {

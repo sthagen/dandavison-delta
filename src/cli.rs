@@ -11,8 +11,7 @@ use syntect::parsing::SyntaxSet;
 
 use crate::bat_utils::assets::HighlightingAssets;
 use crate::bat_utils::output::PagingMode;
-use crate::git_config::GitConfig;
-use crate::git_config_entry::GitConfigEntry;
+use crate::git_config::{GitConfig, GitConfigEntry};
 use crate::options;
 
 #[derive(StructOpt, Clone, Default)]
@@ -366,11 +365,21 @@ pub struct Opt {
     #[structopt(long = "hunk-header-style", default_value = "line-number syntax")]
     /// Style (foreground, background, attributes) for the hunk-header. See STYLES section. Special
     /// attributes 'file' and 'line-number' can be used to include the file path, and number of
-    /// first hunk line, in the hunk header. If included in the hunk header, 'file' and
-    /// 'line-number' are styled according to 'file-style' and 'hunk-header-decoration-style'
-    /// respectively. The style 'omit' can be used to remove the hunk header section from the
-    /// output.
+    /// first hunk line, in the hunk header. The style 'omit' can be used to remove the hunk header
+    /// section from the output.
     pub hunk_header_style: String,
+
+    #[structopt(long = "hunk-header-file-style", default_value = "blue")]
+    /// Style (foreground, background, attributes) for the file path part of the hunk-header. See
+    /// STYLES section. The file path will only be displayed if hunk-header-style contains the
+    /// 'file' special attribute.
+    pub hunk_header_file_style: String,
+
+    #[structopt(long = "hunk-header-line-number-style", default_value = "blue")]
+    /// Style (foreground, background, attributes) for the line number part of the hunk-header. See
+    /// STYLES section. The line number will only be displayed if hunk-header-style contains the
+    /// 'line-number' special attribute.
+    pub hunk_header_line_number_style: String,
 
     #[structopt(long = "hunk-header-decoration-style", default_value = "blue box")]
     /// Style (foreground, background, attributes) for the hunk-header decoration. See STYLES
