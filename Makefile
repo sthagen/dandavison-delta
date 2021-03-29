@@ -2,7 +2,7 @@ build:
 	cargo build --release
 
 format:
-	rustfmt src/*.rs
+	git ls-files | grep '\.rs$' | xargs -P 0 rustfmt
 
 lint:
 	cargo clippy
@@ -15,6 +15,7 @@ unit-test:
 end-to-end-test: build
 	./tests/test_raw_output_matches_git_on_full_repo_history
 	./tests/test_deprecated_options > /dev/null
+	./tests/test_navigate_less_history_file
 
 release:
 	@make -f release.Makefile release

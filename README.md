@@ -75,10 +75,10 @@ The most convenient way to configure delta is with a `[delta]` section in `~/.gi
 
 Use `delta --help` to see all the available options.
 
-To change your delta options in a one-off git command, use `git -c ...`. For example
+To change your delta options in a one-off git command, use `git -c`. For example
 
 ```
-git -c delta.line-numbers=false -c delta.max-line-distance=0.8 show
+git -c delta.line-numbers=false show
 ```
 
 Contents
@@ -92,7 +92,8 @@ Contents
    * [Choosing colors (styles)](#choosing-colors-styles)
    * [Line numbers](#line-numbers)
    * [Side-by-side view](#side-by-side-view)
-   * [Custom features](#custom-features)
+   * ["Features": named groups of settings](#features-named-groups-of-settings)
+   * [Custom color themes](#custom-color-themes)
    * [diff-highlight and diff-so-fancy emulation](#diff-highlight-and-diff-so-fancy-emulation)
    * [--color-moved support](#--color-moved-support)
    * [Navigation keybindings for large diffs](#navigation-keybindings-for-large-diffs)
@@ -229,7 +230,7 @@ Alternatively, delta is available in the following package managers:
   <tr>
     <td>Debian / Ubuntu</td>
     <td><br>.deb files are on the <a href="https://github.com/dandavison/delta/releases">releases</a> page and at <a href="https://github.com/barnumbirr/delta-debian/releases">barnumbirr/delta-debian</a><br>
-    <code>dpkg -i file.deb</code></td>
+    <code>dpkg -i file.deb</code>. **IMPORTANT** If you are using Ubuntu <= 19.10 or are mixing apt sources, read https://github.com/dandavison/delta/issues/504, be extremely cautious, and try the versions linked against musl.</td>
   </tr>
   <tr>
     <td>Fedora</td>
@@ -290,15 +291,15 @@ Set delta to be git's pager in your `.gitconfig`. Delta has many options to alte
     pager = delta
 
 [delta]
-    plus-color = "#012800"
-    minus-color = "#340001"
+    plus-style = "syntax #012800"
+    minus-style = "syntax #340001"
     syntax-theme = Monokai Extended
 
 [interactive]
     diffFilter = delta --color-only
 ```
 
-Note that delta color argument values in ~/.gitconfig should be in double quotes, like `--minus-color="#340001"`. For theme names and other values, do not use quotes as they will be passed on to delta, like `theme = Monokai Extended`.
+Note that delta style argument values in ~/.gitconfig should be in double quotes, like `--minus-style="syntax #340001"`. For theme names and other values, do not use quotes as they will be passed on to delta, like `theme = Monokai Extended`.
 
 All git commands that display diff output should now display syntax-highlighted output. For example:
   - `git diff`
@@ -383,7 +384,7 @@ To disable the line numbers in side-by-side view, but keep a vertical delimiter 
 
 Wide lines in the left or right panel are currently truncated. If the truncation is a problem, one approach is to set the width of Delta's output to be  larger than your terminal (e.g. `delta --width 250`) and ensure that `less` doesn't wrap long lines (e.g. `export LESS=-RS`); then one can scroll right to view the full content. (Another approach is to decrease font size in your terminal.)
 
-### Custom features
+### "Features": named groups of settings
 
 All delta options can go under the `[delta]` section in your git config file. However, you can also use named "features" to keep things organized: these are sections in git config like `[delta "my-feature"]`. Here's an example using two custom features:
 
@@ -410,7 +411,23 @@ All delta options can go under the `[delta]` section in your git config file. Ho
 ```
 <table><tr><td><img width=400px src="https://user-images.githubusercontent.com/52205/86275048-a96ee500-bba0-11ea-8a19-584f69758aee.png" alt="image" /></td></tr></table>
 
+### Custom color themes
 
+A "theme" in delta is just a collection of settings grouped together in a named [feature](#features-named-groups-of-settings). The delta git repo contains a collection of themes created by users. These focus on the visual appearance: colors etc. If you want features like `side-by-side` or `navigate`, you would set that yourself, after selecting the color theme. To use the delta themes, clone the delta repo (or download the [themes.gitconfig](./themes.gitconfig) file) and add the following entry in your gitconfig:
+
+```gitconfig
+[include]
+    path = /PATH/TO/delta/themes.gitconfig
+```
+
+Then, add your chosen color theme to your features list, e.g.
+
+```gitconfig
+[delta]
+    features = collared-trogon
+    side-by-side = true
+    ...
+```
 
 ### diff-highlight and diff-so-fancy emulation
 
@@ -447,14 +464,6 @@ In order to support this feature, Delta has to look at the raw colors it receive
 ### Navigation keybindings for large diffs
 
 Use the `navigate` feature to activate navigation keybindings. In this mode, pressing `n` will jump forward to the next file in the diff, and `N` will jump backwards. If you are viewing multiple commits (e.g. via `git log -p`) then navigation will also visit commit boundaries.
-
-The recommended way to use `navigate` is to activate it only when needed, for example
-
-```bash
-git -c delta.navigate=true log -p
-```
-
-The reason that `navigate` should not be used all the time is that Delta uses `less` as its pager, and the `navigate` feature works by doing `less --pattern <regex-matching-file-and-commit-lines>`. When the git output does not contain file/commit diff lines, `less --pattern` behaves unhelpfully (see [#234](https://github.com/dandavison/delta/issues/234), [#237](https://github.com/dandavison/delta/issues/237)).
 
 
 ### 24 bit color (truecolor)
@@ -597,7 +606,7 @@ and use the executable found at `./target/release/delta`.
 ## Full --help output
 
 ```
-delta 0.6.0
+delta 0.7.1
 A viewer for git and diff output
 
 USAGE:
@@ -635,7 +644,15 @@ FLAGS:
         --list-syntax-themes         List available syntax-highlighting color themes
         --show-syntax-themes         Show all available syntax-highlighting themes, each with an example of highlighted
                                      diff output. If diff output is supplied on standard input then this will be used
-                                     for the demo. For example: `git show --color=always | delta --show-syntax-themes`
+                                     for the demo. For example: `git show | delta --show-syntax-themes`
+        --show-themes                Show available delta themes, each with an example of highlighted diff output. A
+                                     delta theme is a delta named feature (see --features) that sets either `light` or
+                                     `dark`. See https://github.com/dandavison/delta#custom-color-themes. If diff output
+                                     is supplied on standard input then this will be used for the demo. For example:
+                                     `git show | delta --show-themes`. By default shows dark or light themes only,
+                                     according to whether delta is in dark or light mode (as set by the user or inferred
+                                     from BAT_THEME). To control the themes shown, use --dark or --light, or both, on
+                                     the command line together with this option
         --no-gitconfig               Do not take any settings from git config. See GIT CONFIG section
         --raw                        Do not alter the input in any way. This is mainly intended for testing delta
         --color-only                 Do not alter the input structurally in any way, but color and highlight hunk lines

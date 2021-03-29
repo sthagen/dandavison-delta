@@ -118,12 +118,29 @@ impl OutputType {
                     p.env("LESSCHARSET", "UTF-8");
                     p
                 } else {
+                    if pager_path.file_stem() == Some(&OsString::from("delta")) {
+                        eprintln!(
+                            "\
+It looks like you have set delta as the value of $PAGER. \
+This would result in a non-terminating recursion. \
+delta is not an appropriate value for $PAGER \
+(but it is an appropriate value for $GIT_PAGER)."
+                        );
+                        std::process::exit(1);
+                    }
                     let mut p = Command::new(&pager_path);
                     p.args(args);
                     p
                 };
-                if config.navigate {
-                    process.args(&["--pattern", &navigate::make_navigate_regexp(&config)]);
+                if is_less && config.navigate {
+                    if let Ok(hist_file) =
+                        navigate::copy_less_hist_file_and_append_navigate_regexp(config)
+                    {
+                        process.env("LESSHISTFILE", hist_file);
+                        if config.show_themes {
+                            process.arg("+n");
+                        }
+                    }
                 }
                 Ok(process
                     .env("LESSANSIENDCHARS", "mK")
