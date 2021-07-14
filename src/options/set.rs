@@ -40,6 +40,7 @@ macro_rules! set_options {
         )*
         if $check_names {
             option_names.extend(&[
+                "24-bit-color",
                 "diff-highlight", // Does not exist as a flag on config
                 "diff-so-fancy", // Does not exist as a flag on config
                 "features",  // Processed differently
@@ -126,7 +127,9 @@ pub fn set_options(
         [
             color_only,
             commit_decoration_style,
+            commit_regex,
             commit_style,
+            diff_stat_align_width,
             file_added_label,
             file_copied_label,
             file_decoration_style,
@@ -139,6 +142,7 @@ pub fn set_options(
             hunk_header_line_number_style,
             hunk_header_style,
             hyperlinks,
+            hyperlinks_commit_link_format,
             hyperlinks_file_link_format,
             inspect_raw_lines,
             keep_plus_minus_markers,
@@ -161,6 +165,7 @@ pub fn set_options(
             line_numbers_right_format,
             line_numbers_right_style,
             line_numbers_zero_style,
+            pager,
             paging_mode,
             // Hack: plus-style must come before plus-*emph-style because the latter default
             // dynamically to the value of the former.
@@ -169,6 +174,7 @@ pub fn set_options(
             plus_empty_line_marker_style,
             plus_non_emph_style,
             raw,
+            relative_paths,
             show_themes,
             side_by_side,
             tab_width,
@@ -239,55 +245,55 @@ fn set__light__dark__syntax_theme__options(
     );
 }
 
-/// Features are processed differently from all other options. The role of this function is to
-/// collect all configuration related to features and summarize it as a single list
-/// (space-separated string) of enabled features. The list is arranged in order of increasing
-/// priority in the sense that, when searching for a option value, one starts at the right-hand end
-/// and moves leftward, examining each feature in turn until a feature that associates a value with
-/// the option name is encountered. This search is documented in
-/// `get_option_value::get_option_value`.
-///
-/// The feature list comprises features deriving from the following sources, listed in order of
-/// decreasing priority:
-///
-/// 1. Suppose the command-line has `--features "a b"`. Then
-///    - `b`, followed by b's "ordered descendents"
-///    - `a`, followed by a's "ordered descendents"
-///
-/// 2. Suppose the command line enables two builtin features via `--navigate --diff-so-fancy`. Then
-///    - `diff-so-fancy`
-///    - `navigate`
-///
-/// 3. Suppose the main [delta] section has `features = d e`. Then
-///    - `e`, followed by e's "ordered descendents"
-///    - `d`, followed by d's "ordered descendents"
-///
-/// 4. Suppose the main [delta] section has `diff-highlight = true` followed by `raw = true`.
-///    Then
-///    - `diff-highlight`
-///    - `raw`
-///
-/// The "ordered descendents" of a feature `f` is a list of features obtained via a pre-order
-/// traversal of the feature tree rooted at `f`. This tree arises because it is allowed for a
-/// feature to contain a (key, value) pair that itself enables features.
-///
-/// If a feature has already been included at higher priority, and is encountered again, it is
-/// ignored.
-///
-/// Thus, for example:
-///
-/// delta --features "my-navigate-settings" --navigate   =>   "navigate my-navigate-settings"
-///
-/// In the following configuration, the feature names indicate their priority, with `a` having
-/// highest priority:
-///
-/// delta --g --features "d a"
-///
-/// [delta "a"]
-///     features = c b
-///
-/// [delta "d"]
-///     features = f e
+// Features are processed differently from all other options. The role of this function is to
+// collect all configuration related to features and summarize it as a single list
+// (space-separated string) of enabled features. The list is arranged in order of increasing
+// priority in the sense that, when searching for a option value, one starts at the right-hand end
+// and moves leftward, examining each feature in turn until a feature that associates a value with
+// the option name is encountered. This search is documented in
+// `get_option_value::get_option_value`.
+//
+// The feature list comprises features deriving from the following sources, listed in order of
+// decreasing priority:
+//
+// 1. Suppose the command-line has `--features "a b"`. Then
+//    - `b`, followed by b's "ordered descendents"
+//    - `a`, followed by a's "ordered descendents"
+//
+// 2. Suppose the command line enables two builtin features via `--navigate --diff-so-fancy`. Then
+//    - `diff-so-fancy`
+//    - `navigate`
+//
+// 3. Suppose the main [delta] section has `features = d e`. Then
+//    - `e`, followed by e's "ordered descendents"
+//    - `d`, followed by d's "ordered descendents"
+//
+// 4. Suppose the main [delta] section has `diff-highlight = true` followed by `raw = true`.
+//    Then
+//    - `diff-highlight`
+//    - `raw`
+//
+// The "ordered descendents" of a feature `f` is a list of features obtained via a pre-order
+// traversal of the feature tree rooted at `f`. This tree arises because it is allowed for a
+// feature to contain a (key, value) pair that itself enables features.
+//
+// If a feature has already been included at higher priority, and is encountered again, it is
+// ignored.
+//
+// Thus, for example:
+//
+// delta --features "my-navigate-settings" --navigate   =>   "navigate my-navigate-settings"
+//
+// In the following configuration, the feature names indicate their priority, with `a` having
+// highest priority:
+//
+// delta --g --features "d a"
+//
+// [delta "a"]
+//     features = c b
+//
+// [delta "d"]
+//     features = f e
 fn gather_features(
     opt: &cli::Opt,
     builtin_features: &HashMap<String, features::BuiltinFeature>,
@@ -551,13 +557,20 @@ fn set_widths(
 }
 
 fn set_true_color(opt: &mut cli::Opt) {
+    if opt.true_color == "auto" {
+        // It's equal to its default, so the user might be using the deprecated
+        // --24-bit-color option.
+        if let Some(_24_bit_color) = opt._24_bit_color.as_ref() {
+            opt.true_color = _24_bit_color.clone();
+        }
+    }
     opt.computed.true_color = match opt.true_color.as_ref() {
         "always" => true,
         "never" => false,
         "auto" => is_truecolor_terminal(),
         _ => {
             eprintln!(
-                "Invalid value for --24-bit-color option: {} (valid values are \"always\", \"never\", and \"auto\")",
+                "Invalid value for --true-color option: {} (valid values are \"always\", \"never\", and \"auto\")",
                 opt.true_color
             );
             process::exit(1);
@@ -606,7 +619,7 @@ pub mod tests {
 
     use crate::bat_utils::output::PagingMode;
     use crate::cli;
-    use crate::tests::integration_test_utils::integration_test_utils;
+    use crate::tests::integration_test_utils;
 
     #[test]
     fn test_options_can_be_set_in_git_config() {
@@ -614,7 +627,6 @@ pub mod tests {
         // since e.g. color-only = true (non-default) forces side-by-side = false (default).
         let git_config_contents = b"
 [delta]
-    24-bit-color = never
     color-only = false
     commit-decoration-style = black black
     commit-style = black black
@@ -656,6 +668,7 @@ pub mod tests {
     side-by-side = true
     syntax-theme = xxxyyyzzz
     tabs = 77
+    true-color = never
     whitespace-error-style = black black
     width = 77
     word-diff-regex = xxxyyyzzz

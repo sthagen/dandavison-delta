@@ -13,6 +13,12 @@ pub fn _make_feature(bold: bool) -> Vec<(String, OptionValueFunction)> {
         .collect();
     feature.extend(builtin_feature!([
         (
+            "commit-style",
+            String,
+            Some("color.diff.commit"),
+            _opt => "raw"
+        ),
+        (
             "minus-style",
             String,
             Some("color.diff.old"),
@@ -56,7 +62,7 @@ pub fn _make_feature(bold: bool) -> Vec<(String, OptionValueFunction)> {
 mod test_utils {
     use std::fs::remove_file;
 
-    use crate::tests::integration_test_utils::integration_test_utils;
+    use crate::tests::integration_test_utils;
 
     #[test]
     fn test_diff_highlight_defaults() {

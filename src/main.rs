@@ -82,7 +82,8 @@ fn run_app() -> std::io::Result<i32> {
         return Ok(0);
     }
 
-    let mut output_type = OutputType::from_mode(config.paging_mode, None, &config).unwrap();
+    let mut output_type =
+        OutputType::from_mode(config.paging_mode, config.pager.clone(), &config).unwrap();
     let mut writer = output_type.handle().unwrap();
 
     if atty::is(atty::Stream::Stdin) {
@@ -111,7 +112,7 @@ fn main() -> std::io::Result<()> {
     process::exit(exit_code);
 }
 
-/// Run `diff -u` on the files provided on the command line and display the output.
+/// Run `git diff` on the files provided on the command line and display the output.
 fn diff(
     minus_file: Option<&PathBuf>,
     plus_file: Option<&PathBuf>,
@@ -120,22 +121,31 @@ fn diff(
 ) -> i32 {
     use std::io::BufReader;
     let die = || {
-        eprintln!("Usage: delta minus_file plus_file");
+        eprintln!(
+            "\
+The main way to use delta is to configure it as the pager for git: \
+see https://github.com/dandavison/delta#configuration. \
+You can also use delta to diff two files: `delta file_A file_B`."
+        );
         process::exit(config.error_exit_code);
     };
-    let diff_command = "diff";
-    let mut diff_process = process::Command::new(PathBuf::from(diff_command))
-        .arg("-u")
-        .args(&[
-            minus_file.unwrap_or_else(die),
-            plus_file.unwrap_or_else(die),
-        ])
+    let diff_command = "git";
+    let minus_file = minus_file.unwrap_or_else(die);
+    let plus_file = plus_file.unwrap_or_else(die);
+    let diff_command_path = match grep_cli::resolve_binary(PathBuf::from(diff_command)) {
+        Ok(path) => path,
+        Err(_) => return config.error_exit_code,
+    };
+    let mut diff_process = process::Command::new(diff_command_path)
+        .args(&["diff", "--no-index"])
+        .args(&[minus_file, plus_file])
         .stdout(process::Stdio::piped())
         .spawn()
         .unwrap_or_else(|err| {
             eprintln!("Failed to execute the command '{}': {}", diff_command, err);
             process::exit(config.error_exit_code);
         });
+
     let exit_code = diff_process
         .wait()
         .unwrap_or_else(|_| {
@@ -197,7 +207,7 @@ fn show_config(config: &config::Config, writer: &mut dyn Write) -> std::io::Resu
     // Everything else
     writeln!(
         writer,
-        "    24-bit-color                  = {true_color}
+        "    true-color                    = {true_color}
     file-added-label              = {file_added_label}
     file-modified-label           = {file_modified_label}
     file-removed-label            = {file_removed_label}
@@ -260,6 +270,7 @@ fn show_config(config: &config::Config, writer: &mut dyn Write) -> std::io::Resu
     max-line-length               = {max_line_length}
     navigate                      = {navigate}
     navigate-regexp               = {navigate_regexp}
+    pager                         = {pager}
     paging                        = {paging_mode}
     side-by-side                  = {side_by_side}
     syntax-theme                  = {syntax_theme}
@@ -273,6 +284,7 @@ fn show_config(config: &config::Config, writer: &mut dyn Write) -> std::io::Resu
             None => "".to_string(),
             Some(s) => s.to_string(),
         },
+        pager = config.pager.clone().unwrap_or_else(|| "none".to_string()),
         paging_mode = match config.paging_mode {
             PagingMode::Always => "always",
             PagingMode::Never => "never",
@@ -375,13 +387,25 @@ fn show_syntax_themes() -> std::io::Result<()> {
     let mut writer = output_type.handle().unwrap();
     opt.computed.syntax_set = assets.syntax_set;
 
-    if !(opt.dark || opt.light) {
-        _show_syntax_themes(opt.clone(), false, &mut writer)?;
-        _show_syntax_themes(opt, true, &mut writer)?;
-    } else if opt.light {
-        _show_syntax_themes(opt, true, &mut writer)?;
+    let stdin_data = if !atty::is(atty::Stream::Stdin) {
+        let mut buf = Vec::new();
+        io::stdin().lock().read_to_end(&mut buf)?;
+        if !buf.is_empty() {
+            Some(buf)
+        } else {
+            None
+        }
     } else {
-        _show_syntax_themes(opt, false, &mut writer)?
+        None
+    };
+
+    if !(opt.dark || opt.light) {
+        _show_syntax_themes(opt.clone(), false, &mut writer, stdin_data.as_ref())?;
+        _show_syntax_themes(opt, true, &mut writer, stdin_data.as_ref())?;
+    } else if opt.light {
+        _show_syntax_themes(opt, true, &mut writer, stdin_data.as_ref())?;
+    } else {
+        _show_syntax_themes(opt, false, &mut writer, stdin_data.as_ref())?
     };
     Ok(())
 }
@@ -390,10 +414,14 @@ fn _show_syntax_themes(
     mut opt: cli::Opt,
     is_light_mode: bool,
     writer: &mut dyn Write,
+    stdin: Option<&Vec<u8>>,
 ) -> std::io::Result<()> {
     use bytelines::ByteLines;
     use std::io::BufReader;
-    let mut input = b"\
+    let input = match stdin {
+        Some(stdin_data) => &stdin_data[..],
+        None => {
+            b"\
 diff --git a/example.rs b/example.rs
 index f38589a..0f1bb83 100644
 --- a/example.rs
@@ -408,12 +436,6 @@ index f38589a..0f1bb83 100644
 +    let result = f64::powf(num, 3.0);
 +    println!(\"The cube of {:.2} is {:.2}.\", num, result);
 "
-    .to_vec();
-    if !atty::is(atty::Stream::Stdin) {
-        let mut buf = Vec::new();
-        io::stdin().lock().read_to_end(&mut buf)?;
-        if !buf.is_empty() {
-            input = buf;
         }
     };
 
@@ -495,11 +517,10 @@ pub fn _list_syntax_themes_for_machines(writer: &mut dyn Write) -> std::io::Resu
 #[cfg(test)]
 mod main_tests {
     use super::*;
-    use std::fs;
     use std::io::{Cursor, Seek, SeekFrom};
 
     use crate::ansi;
-    use crate::tests::integration_test_utils::integration_test_utils;
+    use crate::tests::integration_test_utils;
 
     #[test]
     fn test_show_config() {
@@ -520,12 +541,12 @@ mod main_tests {
         let opt = integration_test_utils::make_options_from_args(&[]);
 
         let mut writer = Cursor::new(vec![0; 1024]);
-        _show_syntax_themes(opt, true, &mut writer).unwrap();
+        _show_syntax_themes(opt, true, &mut writer, None).unwrap();
         let mut s = String::new();
         writer.seek(SeekFrom::Start(0)).unwrap();
         writer.read_to_string(&mut s).unwrap();
         let s = ansi::strip_ansi_codes(&s);
-        assert!(s.contains("\nTheme: gruvbox-white\n"));
+        assert!(s.contains("\nTheme: gruvbox-light\n"));
         println!("{}", s);
         assert!(s.contains("\nfn print_cube(num: f64) {\n"));
     }
@@ -555,30 +576,30 @@ mod main_tests {
     }
 
     #[test]
-    #[cfg_attr(target_os = "windows", ignore)]
+    #[ignore] // https://github.com/dandavison/delta/pull/546
     fn test_diff_same_empty_file() {
-        _do_diff_test("/dev/null", "/dev/null", false, None);
+        _do_diff_test("/dev/null", "/dev/null", false);
     }
 
     #[test]
     #[cfg_attr(target_os = "windows", ignore)]
     fn test_diff_same_non_empty_file() {
-        _do_diff_test("/etc/passwd", "/etc/passwd", false, None);
+        _do_diff_test("/etc/passwd", "/etc/passwd", false);
     }
 
     #[test]
     #[cfg_attr(target_os = "windows", ignore)]
     fn test_diff_empty_vs_non_empty_file() {
-        _do_diff_test("/dev/null", "/etc/passwd", true, Some("/etc/passwd"));
+        _do_diff_test("/dev/null", "/etc/passwd", true);
     }
 
     #[test]
     #[cfg_attr(target_os = "windows", ignore)]
     fn test_diff_two_non_empty_files() {
-        _do_diff_test("/etc/group", "/etc/passwd", true, None);
+        _do_diff_test("/etc/group", "/etc/passwd", true);
     }
 
-    fn _do_diff_test(file_a: &str, file_b: &str, expect_diff: bool, expected_diff: Option<&str>) {
+    fn _do_diff_test(file_a: &str, file_b: &str, expect_diff: bool) {
         let config = integration_test_utils::make_config_from_args(&[]);
         let mut writer = Cursor::new(vec![]);
         let exit_code = diff(
@@ -587,17 +608,7 @@ mod main_tests {
             &config,
             &mut writer,
         );
-        let s = ansi::strip_ansi_codes(&_read_to_string(&mut writer));
-        if expect_diff {
-            assert_eq!(exit_code, 1);
-            assert!(s.contains(&format!("comparing: {} ⟶   {}\n", file_a, file_b)));
-            if let Some(expected_diff) = expected_diff {
-                assert!(s.contains(&fs::read_to_string(expected_diff).unwrap()));
-            }
-        } else {
-            assert_eq!(exit_code, 0);
-            assert!(s.is_empty());
-        }
+        assert_eq!(exit_code, if expect_diff { 1 } else { 0 });
     }
 
     fn _read_to_string(cursor: &mut Cursor<Vec<u8>>) -> String {

@@ -8,14 +8,14 @@ edition = "2018"
 homepage = "https://github.com/dandavison/delta"
 license = "MIT"
 repository = "https://github.com/dandavison/delta"
-version = "0.7.1"
+version = "0.8.3"
 
 [[bin]]
 name = "delta"
 path = "src/main.rs"
 
 [dependencies]
-ansi_colours = "1.0.1"
+ansi_colours = "1.0.4"
 ansi_term = "0.12.1"
 atty = "0.2.14"
 bitflags = "1.2.1"
@@ -23,18 +23,20 @@ box_drawing = "0.1.2"
 bytelines = "2.2.2"
 console = "0.14.1"
 dirs-next = "2.0.0"
-itertools = "0.10.0"
+grep-cli = "0.1.6"
+itertools = "0.10.1"
 lazy_static = "1.4"
-regex = "1.4.5"
+pathdiff = "0.2.0"
+regex = "1.4.6"
 shell-words = "1.0.0"
-structopt = "0.3.21"
-unicode-segmentation = "1.7.1"
+structopt = "0.3.22"
+unicode-segmentation = "1.8.0"
 unicode-width = "0.1.8"
-vte = "0.10.0"
+vte = "0.10.1"
 xdg = "2.2.0"
 
 [dependencies.git2]
-version = "0.13.17"
+version = "0.13.20"
 default-features = false
 features = []
 

@@ -35,16 +35,15 @@ pub fn set__is_light_mode__syntax_theme__syntax_set(
 }
 
 pub fn is_light_syntax_theme(theme: &str) -> bool {
-    LIGHT_SYNTAX_THEMES.contains(&theme)
+    LIGHT_SYNTAX_THEMES.contains(&theme) || theme.to_lowercase().contains("light")
 }
 
-const LIGHT_SYNTAX_THEMES: [&str; 7] = [
+const LIGHT_SYNTAX_THEMES: [&str; 6] = [
     "GitHub",
     "gruvbox-light",
     "gruvbox-white",
     "Monokai Extended Light",
     "OneHalfLight",
-    "ansi-light",
     "Solarized (light)",
 ];
 
@@ -124,7 +123,7 @@ mod tests {
 
     use super::*;
     use crate::color;
-    use crate::tests::integration_test_utils::integration_test_utils;
+    use crate::tests::integration_test_utils;
 
     #[test]
     fn test_syntax_theme_selection() {
@@ -188,10 +187,10 @@ mod tests {
             }
             let is_true_color = true;
             if is_true_color {
-                args.push("--24-bit-color");
+                args.push("--true-color");
                 args.push("always");
             } else {
-                args.push("--24-bit-color");
+                args.push("--true-color");
                 args.push("never");
             }
             match mode {

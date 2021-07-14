@@ -17,12 +17,6 @@ pub fn make_feature() -> Vec<(String, OptionValueFunction)> {
             _opt => "bold green 22"
         ),
         (
-            "commit-style",
-            String,
-            Some("color.diff.commit"),
-            _opt => "bold yellow"
-        ),
-        (
             "file-style",
             String,
             Some("color.diff.meta"),
@@ -54,7 +48,7 @@ pub fn make_feature() -> Vec<(String, OptionValueFunction)> {
 pub mod tests {
     use std::fs::remove_file;
 
-    use crate::tests::integration_test_utils::integration_test_utils;
+    use crate::tests::integration_test_utils;
 
     #[test]
     fn test_diff_so_fancy_defaults() {
@@ -64,7 +58,7 @@ pub mod tests {
             None,
         );
 
-        assert_eq!(opt.commit_style, "bold yellow");
+        assert_eq!(opt.commit_style, "raw");
         assert_eq!(opt.commit_decoration_style, "none");
 
         assert_eq!(opt.file_style, "11");

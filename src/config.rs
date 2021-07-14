@@ -23,7 +23,10 @@ pub struct Config {
     pub background_color_extends_to_terminal_width: bool,
     pub commit_style: Style,
     pub color_only: bool,
+    pub commit_regex: Regex,
+    pub cwd_relative_to_repo_root: Option<String>,
     pub decorations_width: cli::Width,
+    pub diff_stat_align_width: usize,
     pub error_exit_code: i32,
     pub file_added_label: String,
     pub file_copied_label: String,
@@ -38,6 +41,7 @@ pub struct Config {
     pub hunk_header_style_include_file_path: bool,
     pub hunk_header_style_include_line_number: bool,
     pub hyperlinks: bool,
+    pub hyperlinks_commit_link_format: Option<String>,
     pub hyperlinks_file_link_format: String,
     pub inspect_raw_lines: cli::InspectRawLines,
     pub keep_plus_minus_markers: bool,
@@ -62,6 +66,7 @@ pub struct Config {
     pub navigate_regexp: Option<String>,
     pub null_style: Style,
     pub null_syntect_style: SyntectStyle,
+    pub pager: Option<String>,
     pub paging_mode: PagingMode,
     pub plus_emph_style: Style,
     pub plus_empty_line_marker_style: Style,
@@ -70,6 +75,7 @@ pub struct Config {
     pub plus_style: Style,
     pub git_minus_style: Style,
     pub git_plus_style: Style,
+    pub relative_paths: bool,
     pub show_themes: bool,
     pub side_by_side: bool,
     pub side_by_side_data: side_by_side::SideBySideData,
@@ -133,6 +139,16 @@ impl From<cli::Opt> for Config {
                 .map(|s| s.parse::<f64>().unwrap_or(0.0))
                 .unwrap_or(0.0);
 
+        let commit_regex = Regex::new(&opt.commit_regex).unwrap_or_else(|_| {
+            eprintln!(
+                "Invalid commit-regex: {}. \
+                 The value must be a valid Rust regular expression. \
+                 See https://docs.rs/regex.",
+                opt.commit_regex
+            );
+            process::exit(1);
+        });
+
         let tokenization_regex = Regex::new(&opt.tokenization_regex).unwrap_or_else(|_| {
             eprintln!(
                 "Invalid word-diff-regex: {}. \
@@ -182,7 +198,10 @@ impl From<cli::Opt> for Config {
                 .background_color_extends_to_terminal_width,
             commit_style,
             color_only: opt.color_only,
+            commit_regex,
+            cwd_relative_to_repo_root: std::env::var("GIT_PREFIX").ok(),
             decorations_width: opt.computed.decorations_width,
+            diff_stat_align_width: opt.diff_stat_align_width,
             error_exit_code: 2, // Use 2 for error because diff uses 0 and 1 for non-error.
             file_added_label,
             file_copied_label,
@@ -203,6 +222,7 @@ impl From<cli::Opt> for Config {
                 .split(' ')
                 .any(|s| s == "line-number"),
             hyperlinks: opt.hyperlinks,
+            hyperlinks_commit_link_format: opt.hyperlinks_commit_link_format,
             hyperlinks_file_link_format: opt.hyperlinks_file_link_format,
             inspect_raw_lines: opt.computed.inspect_raw_lines,
             keep_plus_minus_markers: opt.keep_plus_minus_markers,
@@ -227,6 +247,7 @@ impl From<cli::Opt> for Config {
             navigate_regexp,
             null_style: Style::new(),
             null_syntect_style: SyntectStyle::default(),
+            pager: opt.pager,
             paging_mode: opt.computed.paging_mode,
             plus_emph_style,
             plus_empty_line_marker_style,
@@ -235,6 +256,7 @@ impl From<cli::Opt> for Config {
             plus_style,
             git_minus_style,
             git_plus_style,
+            relative_paths: opt.relative_paths,
             show_themes: opt.show_themes,
             side_by_side: opt.side_by_side,
             side_by_side_data,

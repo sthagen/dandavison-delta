@@ -69,10 +69,7 @@ macro_rules! builtin_feature {
                 $option_name.to_string(),
                 Box::new(move |$opt: &$crate::cli::Opt, git_config: &Option<$crate::git_config::GitConfig>| {
                     match (git_config, $git_config_key) {
-                        (Some(git_config), Some(git_config_key)) => match git_config.get::<$type>(git_config_key) {
-                            Some(value) => Some($crate::features::GitConfigValue(value.into())),
-                            _ => None,
-                        },
+                        (Some(git_config), Some(git_config_key)) => git_config.get::<$type>(git_config_key).map(|value| $crate::features::GitConfigValue(value.into())),
                         _ => None,
                     }
                     .unwrap_or_else(|| $crate::features::DefaultValue($value.into()))
@@ -98,7 +95,7 @@ pub mod tests {
 
     use crate::cli;
     use crate::features::make_builtin_features;
-    use crate::tests::integration_test_utils::integration_test_utils::make_options_from_args_and_git_config;
+    use crate::tests::integration_test_utils::make_options_from_args_and_git_config;
 
     #[test]
     fn test_builtin_features_have_flags_and_these_set_features() {

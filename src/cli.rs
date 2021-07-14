@@ -231,16 +231,23 @@ pub struct Opt {
     /// --file-renamed-label.
     pub navigate: bool,
 
+    #[structopt(long = "relative-paths")]
+    /// Output all file paths relative to the current directory so that they
+    /// resolve correctly when clicked on or used in shell commands.
+    pub relative_paths: bool,
+
     #[structopt(long = "hyperlinks")]
-    /// Render commit hashes, file names, and line numbers as hyperlinks, according to the
-    /// hyperlink spec for terminal emulators:
-    /// https://gist.github.com/egmontkob/eb114294efbcd5adb1944c9f3cb5feda. By default, file names
-    /// and line numbers link to the local file using a file URL, whereas commit hashes link to the
-    /// commit in GitHub, if the remote repository is hosted by GitHub. See
-    /// --hyperlinks-file-link-format for full control over the file URLs emitted. Hyperlinks are
-    /// supported by several common terminal emulators. To make them work, you must pass the -r (as
-    /// opposed to -R) flag to less, e.g. via `export DELTA_PAGER=less -rX`. If you use tmux, then
-    /// you will also need a patched fork of tmux (see https://github.com/dandavison/tmux).
+    /// Render commit hashes, file names, and line numbers as hyperlinks,
+    /// according to the hyperlink spec for terminal emulators:
+    /// https://gist.github.com/egmontkob/eb114294efbcd5adb1944c9f3cb5feda. By
+    /// default, file names and line numbers link to the local file using a file
+    /// URL, whereas commit hashes link to the commit in GitHub, if the remote
+    /// repository is hosted by GitHub. See --hyperlinks-file-link-format for
+    /// full control over the file URLs emitted. Hyperlinks are supported by
+    /// several common terminal emulators. To make them work, you must use less
+    /// version >= 581 with the -R flag (or use -r with older less versions, but
+    /// this will break e.g. --navigate). If you use tmux, then you will also
+    /// need a patched fork of tmux (see https://github.com/dandavison/tmux).
     pub hyperlinks: bool,
 
     #[structopt(long = "keep-plus-minus-markers")]
@@ -352,6 +359,10 @@ pub struct Opt {
     /// (underline), 'ol' (overline), or the combination 'ul ol'.
     pub commit_decoration_style: String,
 
+    /// The regular expression used to identify the commit line when parsing git output.
+    #[structopt(long = "commit-regex", default_value = r"^commit ")]
+    pub commit_regex: String,
+
     #[structopt(long = "file-style", default_value = "blue")]
     /// Style (foreground, background, attributes) for the file section. See STYLES section. The
     /// style 'omit' can be used to remove the file section from the output.
@@ -363,14 +374,23 @@ pub struct Opt {
     /// (overline), or the combination 'ul ol'.
     pub file_decoration_style: String,
 
-    /// Format string for file hyperlinks. The placeholders "{path}" and "{line}" will be replaced
-    /// by the absolute file path and the line number, respectively. The default value of this
-    /// option creates hyperlinks using standard file URLs; your operating system should open these
-    /// in the application registered for that file type. However, these do not make use of the
-    /// line number. In order for the link to open the file at the correct line number, you could
-    /// use a custom URL format such as "file-line://{path}:{line}" and register an application to
-    /// handle the custom "file-line" URL scheme by opening the file in your editor/IDE at the
-    /// indicated line number. See https://github.com/dandavison/open-in-editor for an example.
+    /// Format string for commit hyperlinks (requires --hyperlinks). The
+    /// placeholder "{commit}" will be replaced by the commit hash. For example:
+    /// --hyperlinks-commit-link-format='https://mygitrepo/{commit}/'
+    #[structopt(long = "hyperlinks-commit-link-format")]
+    pub hyperlinks_commit_link_format: Option<String>,
+
+    /// Format string for file hyperlinks (requires --hyperlinks). The
+    /// placeholders "{path}" and "{line}" will be replaced by the absolute file
+    /// path and the line number, respectively. The default value of this option
+    /// creates hyperlinks using standard file URLs; your operating system
+    /// should open these in the application registered for that file type.
+    /// However, these do not make use of the line number. In order for the link
+    /// to open the file at the correct line number, you could use a custom URL
+    /// format such as "file-line://{path}:{line}" and register an application
+    /// to handle the custom "file-line" URL scheme by opening the file in your
+    /// editor/IDE at the indicated line number. See
+    /// https://github.com/dandavison/open-in-editor for an example.
     #[structopt(long = "hyperlinks-file-link-format", default_value = "file://{path}")]
     pub hyperlinks_file_link_format: String,
 
@@ -482,6 +502,11 @@ pub struct Opt {
     #[structopt(short = "w", long = "width")]
     pub width: Option<String>,
 
+    /// Width allocated for file paths in a diff stat section. If a relativized
+    /// file path exceeds this width then the diff stat will be misaligned.
+    #[structopt(long = "diff-stat-align-width", default_value = "48")]
+    pub diff_stat_align_width: usize,
+
     /// The number of spaces to replace tab characters with. Use --tabs=0 to pass tab characters
     /// through directly, but note that in that case delta will calculate line widths assuming tabs
     /// occupy one character's width on the screen: if your terminal renders tabs as more than than
@@ -494,8 +519,12 @@ pub struct Opt {
     /// has the value "truecolor" or "24bit". If your terminal application (the application you use
     /// to enter commands at a shell prompt) supports 24 bit colors, then it probably already sets
     /// this environment variable, in which case you don't need to do anything.
-    #[structopt(long = "24-bit-color", default_value = "auto")]
+    #[structopt(long = "true-color", default_value = "auto")]
     pub true_color: String,
+
+    /// Deprecated: use --true-color.
+    #[structopt(long = "24-bit-color")]
+    pub _24_bit_color: Option<String>,
 
     /// Whether to examine ANSI color escape sequences in raw lines received from Git and handle
     /// lines colored in certain ways specially. This is on by default: it is how Delta supports
@@ -503,9 +532,14 @@ pub struct Opt {
     #[structopt(long = "inspect-raw-lines", default_value = "true")]
     pub inspect_raw_lines: String,
 
-    /// Whether to use a pager when displaying output. Options are: auto, always, and never. The
-    /// default pager is `less`: this can be altered by setting the environment variables
-    /// DELTA_PAGER, BAT_PAGER, or PAGER (and that is their order of priority).
+    #[structopt(long)]
+    /// Which pager to use. The default pager is `less`. You can also change pager
+    /// by setting the environment variables DELTA_PAGER, BAT_PAGER, or PAGER
+    /// (and that is their order of priority). This option overrides all environment
+    /// variables above.
+    pub pager: Option<String>,
+
+    /// Whether to use a pager when displaying output. Options are: auto, always, and never.
     #[structopt(long = "paging", default_value = "auto")]
     pub paging_mode: String,
 

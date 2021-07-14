@@ -5,8 +5,8 @@ mod tests {
     use crate::delta::State;
     use crate::style;
     use crate::tests::ansi_test_utils::ansi_test_utils;
-    use crate::tests::integration_test_utils::integration_test_utils;
-    use crate::tests::test_utils::test_utils;
+    use crate::tests::integration_test_utils;
+    use crate::tests::test_utils;
 
     #[test]
     fn test_added_file() {
@@ -928,7 +928,7 @@ src/align.rs
             &["--color-only", "--max-line-length", "1"],
             &["--color-only", "--width", "1"],
             &["--color-only", "--tabs", "10"],
-            &["--color-only", "--24-bit-color", "always"],
+            &["--color-only", "--true-color", "always"],
             &["--color-only", "--inspect-raw-lines", "false"],
             &["--color-only", "--whitespace-error-style", "22 reverse"],
         ];
@@ -1569,6 +1569,54 @@ src/align.rs:71: impl<'a> Alignment<'a> { │
         ));
     }
 
+    #[test]
+    fn test_file_mode_change_gain_executable_bit() {
+        let config = integration_test_utils::make_config_from_args(&[]);
+        let output = integration_test_utils::run_delta(
+            GIT_DIFF_FILE_MODE_CHANGE_GAIN_EXECUTABLE_BIT,
+            &config,
+        );
+        let output = strip_ansi_codes(&output);
+        assert!(output.contains(r"src/delta.rs: mode +x"));
+    }
+
+    #[test]
+    fn test_file_mode_change_lose_executable_bit() {
+        let config = integration_test_utils::make_config_from_args(&[]);
+        let output = integration_test_utils::run_delta(
+            GIT_DIFF_FILE_MODE_CHANGE_LOSE_EXECUTABLE_BIT,
+            &config,
+        );
+        let output = strip_ansi_codes(&output);
+        assert!(output.contains(r"src/delta.rs: mode -x"));
+    }
+
+    #[test]
+    fn test_hyperlinks_commit_link_format() {
+        let config = integration_test_utils::make_config_from_args(&[
+            // If commit-style is not set then the commit line is handled in raw
+            // mode, in which case we only format hyperlinks if output is a tty;
+            // this causes the test to fail on Github Actions, but pass locally
+            // if output is left going to the screen.
+            "--commit-style",
+            "blue",
+            "--hyperlinks",
+            "--hyperlinks-commit-link-format",
+            "https://invent.kde.org/utilities/konsole/-/commit/{commit}",
+        ]);
+        let output = integration_test_utils::run_delta(GIT_DIFF_SINGLE_HUNK, &config);
+        assert!(output.contains(r"https://invent.kde.org/utilities/konsole/-/commit/94907c0f136f46dc46ffae2dc92dca9af7eb7c2e"));
+    }
+
+    #[test]
+    fn test_filenames_with_spaces() {
+        let config = integration_test_utils::make_config_from_args(&[]);
+        let output =
+            integration_test_utils::run_delta(GIT_DIFF_NO_INDEX_FILENAMES_WITH_SPACES, &config);
+        let output = strip_ansi_codes(&output);
+        assert!(output.contains("a b ⟶   c d\n"));
+    }
+
     const GIT_DIFF_SINGLE_HUNK: &str = "\
 commit 94907c0f136f46dc46ffae2dc92dca9af7eb7c2e
 Author: Dan Davison <dandavison7@gmail.com>
@@ -2172,4 +2220,26 @@ Date:   Sun Nov 1 15:28:53 2020 -0500
 \ No newline at end of file[m
 [32m+[m[32m][m
 "#;
+
+    const GIT_DIFF_FILE_MODE_CHANGE_GAIN_EXECUTABLE_BIT: &str = "
+diff --git a/src/delta.rs b/src/delta.rs
+old mode 100644
+new mode 100755
+";
+
+    const GIT_DIFF_FILE_MODE_CHANGE_LOSE_EXECUTABLE_BIT: &str = "
+diff --git a/src/delta.rs b/src/delta.rs
+old mode 100755
+new mode 100644
+";
+
+    const GIT_DIFF_NO_INDEX_FILENAMES_WITH_SPACES: &str = "
+diff --git a/a b b/c d
+index d00491f..0cfbf08 100644
+--- a/a b	
++++ b/c d	
+@@ -1 +1 @@
+-1
++2
+";
 }

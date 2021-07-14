@@ -62,7 +62,9 @@ struct StateMachine<'a> {
     source: Source,
     minus_file: String,
     plus_file: String,
-    file_event: parse::FileEvent,
+    minus_file_event: parse::FileEvent,
+    plus_file_event: parse::FileEvent,
+    diff_line: String,
     painter: Painter<'a>,
     config: &'a Config,
 
@@ -91,7 +93,9 @@ impl<'a> StateMachine<'a> {
             source: Source::Unknown,
             minus_file: "".to_string(),
             plus_file: "".to_string(),
-            file_event: parse::FileEvent::NoEvent,
+            minus_file_event: parse::FileEvent::NoEvent,
+            plus_file_event: parse::FileEvent::NoEvent,
+            diff_line: "".to_string(),
             current_file_pair: None,
             handled_file_meta_header_line_file_pair: None,
             painter: Painter::new(writer, config),
@@ -111,20 +115,26 @@ impl<'a> StateMachine<'a> {
                 self.source = detect_source(&line);
             }
 
-            let mut handled_line = if line.starts_with("commit ") {
+            let mut handled_line = if self.config.commit_regex.is_match(line) {
                 self.handle_commit_meta_header_line()?
+            } else if (self.state == State::CommitMeta || self.state == State::Unknown)
+                && line.starts_with(' ')
+            {
+                self.handle_diff_stat_line()?
             } else if line.starts_with("diff ") {
                 self.handle_file_meta_diff_line()?
             } else if (self.state == State::FileMeta || self.source == Source::DiffUnified)
                 && (line.starts_with("--- ")
                     || line.starts_with("rename from ")
-                    || line.starts_with("copy from "))
+                    || line.starts_with("copy from ")
+                    || line.starts_with("old mode "))
             {
                 self.handle_file_meta_minus_line()?
             } else if (self.state == State::FileMeta || self.source == Source::DiffUnified)
                 && (line.starts_with("+++ ")
                     || line.starts_with("rename to ")
-                    || line.starts_with("copy to "))
+                    || line.starts_with("copy to ")
+                    || line.starts_with("new mode "))
             {
                 self.handle_file_meta_plus_line()?
             } else if line.starts_with("@@") {
@@ -136,7 +146,7 @@ impl<'a> StateMachine<'a> {
                 self.handle_additional_file_meta_cases()?
             } else if self.state.is_in_hunk() {
                 // A true hunk line should start with one of: '+', '-', ' '. However, handle_hunk_line
-                // handles all lines until the state self transitions away from the hunk states.
+                // handles all lines until the state transitions away from the hunk states.
                 self.handle_hunk_line()?
             } else {
                 false
@@ -226,21 +236,54 @@ impl<'a> StateMachine<'a> {
         Ok(())
     }
 
+    fn handle_diff_stat_line(&mut self) -> std::io::Result<bool> {
+        let mut handled_line = false;
+        if self.config.relative_paths {
+            if let Some(cwd) = self.config.cwd_relative_to_repo_root.as_deref() {
+                if let Some(replacement_line) = parse::relativize_path_in_diff_stat_line(
+                    &self.raw_line,
+                    cwd,
+                    self.config.diff_stat_align_width,
+                ) {
+                    self.painter.emit()?;
+                    writeln!(self.painter.writer, "{}", replacement_line)?;
+                    handled_line = true
+                }
+            }
+        }
+        Ok(handled_line)
+    }
+
     #[allow(clippy::unnecessary_wraps)]
     fn handle_file_meta_diff_line(&mut self) -> std::io::Result<bool> {
         self.painter.paint_buffered_minus_and_plus_lines();
         self.state = State::FileMeta;
         self.handled_file_meta_header_line_file_pair = None;
+        self.diff_line = self.line.clone();
         Ok(false)
     }
 
     fn handle_file_meta_minus_line(&mut self) -> std::io::Result<bool> {
         let mut handled_line = false;
 
-        let parsed_file_meta_line =
-            parse::parse_file_meta_line(&self.line, self.source == Source::GitDiff);
-        self.minus_file = parsed_file_meta_line.0;
-        self.file_event = parsed_file_meta_line.1;
+        let (path_or_mode, file_event) = parse::parse_file_meta_line(
+            &self.line,
+            self.source == Source::GitDiff,
+            if self.config.relative_paths {
+                self.config.cwd_relative_to_repo_root.as_deref()
+            } else {
+                None
+            },
+        );
+        // In the case of ModeChange only, the file path is taken from the diff
+        // --git line (since that is the only place the file path occurs);
+        // otherwise it is taken from the --- / +++ line.
+        self.minus_file = if let parse::FileEvent::ModeChange(_) = &file_event {
+            parse::get_repeated_file_path_from_diff_line(&self.diff_line).unwrap_or(path_or_mode)
+        } else {
+            path_or_mode
+        };
+        self.minus_file_event = file_event;
 
         if self.source == Source::DiffUnified {
             self.state = State::FileMeta;
@@ -271,9 +314,24 @@ impl<'a> StateMachine<'a> {
 
     fn handle_file_meta_plus_line(&mut self) -> std::io::Result<bool> {
         let mut handled_line = false;
-        let parsed_file_meta_line =
-            parse::parse_file_meta_line(&self.line, self.source == Source::GitDiff);
-        self.plus_file = parsed_file_meta_line.0;
+        let (path_or_mode, file_event) = parse::parse_file_meta_line(
+            &self.line,
+            self.source == Source::GitDiff,
+            if self.config.relative_paths {
+                self.config.cwd_relative_to_repo_root.as_deref()
+            } else {
+                None
+            },
+        );
+        // In the case of ModeChange only, the file path is taken from the diff
+        // --git line (since that is the only place the file path occurs);
+        // otherwise it is taken from the --- / +++ line.
+        self.plus_file = if let parse::FileEvent::ModeChange(_) = &file_event {
+            parse::get_repeated_file_path_from_diff_line(&self.diff_line).unwrap_or(path_or_mode)
+        } else {
+            path_or_mode
+        };
+        self.plus_file_event = file_event;
         self.painter
             .set_syntax(parse::get_file_extension_from_file_meta_line_file_path(
                 &self.plus_file,
@@ -308,7 +366,8 @@ impl<'a> StateMachine<'a> {
             &self.minus_file,
             &self.plus_file,
             comparing,
-            &self.file_event,
+            &self.minus_file_event,
+            &self.plus_file_event,
             self.config,
         );
         // FIXME: no support for 'raw'
