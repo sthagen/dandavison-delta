@@ -1,9 +1,8 @@
-use std::process;
-
 use bitflags::bitflags;
 
 use crate::color;
 use crate::config::delta_unreachable;
+use crate::fatal;
 use crate::style::{DecorationStyle, Style};
 
 impl Style {
@@ -19,7 +18,7 @@ impl Style {
         is_emph: bool,
     ) -> Self {
         let (ansi_term_style, is_omitted, is_raw, is_syntax_highlighted) =
-            parse_ansi_term_style(&style_string, default, true_color);
+            parse_ansi_term_style(style_string, default, true_color);
         let decoration_style =
             DecorationStyle::from_str(decoration_style_string.unwrap_or(""), true_color);
         Self {
@@ -49,7 +48,7 @@ impl Style {
         let mut style = Style::from_str(
             &style_string,
             default,
-            decoration_style_string.as_deref(),
+            decoration_style_string,
             true_color,
             is_emph,
         );
@@ -132,16 +131,14 @@ bitflags! {
 impl DecorationStyle {
     pub fn from_str(style_string: &str, true_color: bool) -> Self {
         let (special_attributes, style_string) =
-            extract_special_decoration_attributes(&style_string);
+            extract_special_decoration_attributes(style_string);
         let (style, is_omitted, is_raw, is_syntax_highlighted) =
             parse_ansi_term_style(&style_string, None, true_color);
         if is_raw {
-            eprintln!("'raw' may not be used in a decoration style.");
-            process::exit(1);
+            fatal("'raw' may not be used in a decoration style.");
         };
         if is_syntax_highlighted {
-            eprintln!("'syntax' may not be used in a decoration style.");
-            process::exit(1);
+            fatal("'syntax' may not be used in a decoration style.");
         };
         #[allow(non_snake_case)]
         let (BOX, UL, OL, EMPTY) = (
@@ -256,12 +253,11 @@ fn parse_ansi_term_style(
             seen_foreground = true;
         } else if !seen_background {
             if word == "syntax" {
-                eprintln!(
+                fatal(
                     "You have used the special color 'syntax' as a background color \
-                     (second color in a style string). It may only be used as a foreground \
-                     color (first color in a style string)."
+                       (second color in a style string). It may only be used as a foreground \
+                       color (first color in a style string).",
                 );
-                process::exit(1);
             } else if word == "auto" {
                 background_is_auto = true;
                 style.background = default.and_then(|s| s.ansi_term_style.background);
@@ -270,11 +266,10 @@ fn parse_ansi_term_style(
             }
             seen_background = true;
         } else {
-            eprintln!(
+            fatal(format!(
                 "Invalid style string: {}. See the STYLES section of delta --help.",
                 s
-            );
-            process::exit(1);
+            ));
         }
     }
     if foreground_is_auto && background_is_auto {

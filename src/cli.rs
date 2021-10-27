@@ -13,7 +13,8 @@ use crate::bat_utils::output::PagingMode;
 use crate::git_config::{GitConfig, GitConfigEntry};
 use crate::options;
 
-#[derive(StructOpt, Clone, Default)]
+// No Default trait as this ignores `default_value = ..`
+#[derive(StructOpt)]
 #[structopt(
     name = "delta",
     about = "A viewer for git and diff output",
@@ -419,6 +420,18 @@ pub struct Opt {
     /// (underline), 'ol' (overline), or the combination 'ul ol'.
     pub hunk_header_decoration_style: String,
 
+    /// Default language used for syntax highlighting when this cannot be
+    /// inferred from a filename. It will typically make sense to set this in
+    /// per-repository git config (.git/config)
+    #[structopt(long = "default-language")]
+    pub default_language: Option<String>,
+
+    #[structopt(long = "inline-hint-style", default_value = "blue")]
+    /// Style (foreground, background, attributes) for content added by delta to
+    /// the original diff such as special characters to highlight tabs, and the
+    /// symbols used to indicate wrapped lines. See STYLES section.
+    pub inline_hint_style: String,
+
     /// The regular expression used to decide what a word is for the within-line highlight
     /// algorithm. For less fine-grained matching than the default try --word-diff-regex="\S+"
     /// --max-line-distance=1.0 (this is more similar to `git --word-diff`).
@@ -470,6 +483,32 @@ pub struct Opt {
     #[structopt(long = "line-numbers-right-style", default_value = "auto")]
     pub line_numbers_right_style: String,
 
+    /// How often a line should be wrapped if it does not fit. Zero means to never wrap. Any content
+    /// which does not fit will be truncated. A value of "unlimited" means a line will be wrapped
+    /// as many times as required.
+    #[structopt(long = "wrap-max-lines", default_value = "2")]
+    pub wrap_max_lines: String,
+
+    /// Symbol added to the end of a line indicating that the content has been wrapped
+    /// onto the next line and continues left-aligned.
+    #[structopt(long = "wrap-left-symbol", default_value = "↵")]
+    pub wrap_left_symbol: String,
+
+    /// Symbol added to the end of a line indicating that the content has been wrapped
+    /// onto the next line and continues right-aligned.
+    #[structopt(long = "wrap-right-symbol", default_value = "↴")]
+    pub wrap_right_symbol: String,
+
+    /// Threshold for right-aligning wrapped content. If the length of the remaining wrapped
+    /// content, as a percentage of width, is less than this quantity it will be right-aligned.
+    /// Otherwise it will be left-aligned.
+    #[structopt(long = "wrap-right-percent", default_value = "37.0")]
+    pub wrap_right_percent: String,
+
+    /// Symbol displayed in front of right-aligned wrapped content.
+    #[structopt(long = "wrap-right-prefix-symbol", default_value = "…")]
+    pub wrap_right_prefix_symbol: String,
+
     #[structopt(long = "file-modified-label", default_value = "")]
     /// Text to display in front of a modified file path.
     pub file_modified_label: String,
@@ -490,15 +529,27 @@ pub struct Opt {
     /// Text to display in front of a renamed file path.
     pub file_renamed_label: String,
 
+    #[structopt(long = "hunk-label", default_value = "")]
+    /// Text to display in front of a hunk header.
+    pub hunk_label: String,
+
     #[structopt(long = "max-line-length", default_value = "512")]
     /// Truncate lines longer than this. To prevent any truncation, set to zero. Note that
-    /// syntax-highlighting very long lines (e.g. minified .js) will be very slow if they are not
-    /// truncated.
+    /// delta will be slow on very long lines (e.g. minified .js) if truncation is disabled.
+    /// When wrapping lines it is automatically set to fit at least all visible characters.
     pub max_line_length: usize,
 
-    /// The width of underline/overline decorations. Use --width=variable to extend decorations and
-    /// background colors to the end of the text only. Otherwise background colors extend to the
-    /// full terminal width.
+    /// How to extend the background color to the end of the line in side-by-side mode. Can
+    /// be ansi (default) or spaces (default if output is not to a terminal). Has no effect
+    /// if --width=variable is given.
+    #[structopt(long = "line-fill-method")]
+    pub line_fill_method: Option<String>,
+
+    /// The width of underline/overline decorations. Examples: "72" (exactly 72 characters),
+    // "-2" (auto-detected terminal width minus 2). An expression such as "74-2" is also valid
+    // (equivalent to 72 but may be useful if the caller has a variable holding the value "74").
+    /// Use --width=variable to extend decorations and background colors to the end of the text
+    /// only. Otherwise background colors extend to the full terminal width.
     #[structopt(short = "w", long = "width")]
     pub width: Option<String>,
 
@@ -626,18 +677,21 @@ pub struct Opt {
     pub computed: ComputedValues,
 
     #[structopt(skip)]
+    pub git_config: Option<GitConfig>,
+
+    #[structopt(skip)]
     pub git_config_entries: HashMap<String, GitConfigEntry>,
 }
 
 #[derive(Default, Clone, Debug)]
 pub struct ComputedValues {
     pub available_terminal_width: usize,
+    pub stdout_is_term: bool,
     pub background_color_extends_to_terminal_width: bool,
     pub decorations_width: Width,
     pub inspect_raw_lines: InspectRawLines,
     pub is_light_mode: bool,
     pub paging_mode: PagingMode,
-    pub syntax_dummy_theme: SyntaxTheme,
     pub syntax_set: SyntaxSet,
     pub syntax_theme: Option<SyntaxTheme>,
     pub true_color: bool,
@@ -675,13 +729,13 @@ impl Default for PagingMode {
 
 impl Opt {
     pub fn from_args_and_git_config(
-        git_config: &mut Option<GitConfig>,
+        git_config: Option<GitConfig>,
         assets: HighlightingAssets,
     ) -> Self {
         Self::from_clap_and_git_config(Self::clap().get_matches(), git_config, assets)
     }
 
-    pub fn from_iter_and_git_config<I>(iter: I, git_config: &mut Option<GitConfig>) -> Self
+    pub fn from_iter_and_git_config<I>(iter: I, git_config: Option<GitConfig>) -> Self
     where
         I: IntoIterator,
         I::Item: Into<OsString> + Clone,
@@ -692,12 +746,13 @@ impl Opt {
 
     fn from_clap_and_git_config(
         arg_matches: clap::ArgMatches,
-        git_config: &mut Option<GitConfig>,
+        mut git_config: Option<GitConfig>,
         assets: HighlightingAssets,
     ) -> Self {
         let mut opt = Opt::from_clap(&arg_matches);
         options::rewrite::apply_rewrite_rules(&mut opt, &arg_matches);
-        options::set::set_options(&mut opt, git_config, &arg_matches, assets);
+        options::set::set_options(&mut opt, &mut git_config, &arg_matches, assets);
+        opt.git_config = git_config;
         opt
     }
 

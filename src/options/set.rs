@@ -1,5 +1,5 @@
 use std::collections::{HashMap, HashSet, VecDeque};
-use std::process;
+use std::convert::TryInto;
 use std::result::Result;
 use std::str::FromStr;
 
@@ -12,8 +12,9 @@ use crate::cli;
 use crate::config;
 use crate::env;
 use crate::errors::*;
+use crate::fatal;
 use crate::features;
-use crate::git_config::{GitConfig, GitConfigEntry, GitRemoteRepo};
+use crate::git_config::{GitConfig, GitConfigEntry};
 use crate::options::option_value::{OptionValue, ProvenancedOptionValue};
 use crate::options::theme;
 
@@ -90,12 +91,8 @@ pub fn set_options(
     let features = gather_features(opt, &builtin_features, git_config);
     opt.features = features.join(" ");
 
-    set_widths(opt, git_config, arg_matches, &option_names);
-
     // Set light, dark, and syntax-theme.
-    set_true_color(opt);
     set__light__dark__syntax_theme__options(opt, git_config, arg_matches, &option_names);
-    theme::set__is_light_mode__syntax_theme__syntax_set(opt, assets);
 
     // HACK: make minus-line styles have syntax-highlighting iff side-by-side.
     if features.contains(&"side-by-side".to_string()) {
@@ -129,6 +126,7 @@ pub fn set_options(
             commit_decoration_style,
             commit_regex,
             commit_style,
+            default_language,
             diff_stat_align_width,
             file_added_label,
             file_copied_label,
@@ -136,6 +134,7 @@ pub fn set_options(
             file_modified_label,
             file_removed_label,
             file_renamed_label,
+            hunk_label,
             file_style,
             hunk_header_decoration_style,
             hunk_header_file_style,
@@ -144,6 +143,7 @@ pub fn set_options(
             hyperlinks,
             hyperlinks_commit_link_format,
             hyperlinks_file_link_format,
+            inline_hint_style,
             inspect_raw_lines,
             keep_plus_minus_markers,
             line_buffer_size,
@@ -157,6 +157,7 @@ pub fn set_options(
             minus_non_emph_style,
             minus_non_emph_style,
             navigate,
+            line_fill_method,
             line_numbers,
             line_numbers_left_format,
             line_numbers_left_style,
@@ -177,6 +178,11 @@ pub fn set_options(
             relative_paths,
             show_themes,
             side_by_side,
+            wrap_max_lines,
+            wrap_right_prefix_symbol,
+            wrap_right_percent,
+            wrap_right_symbol,
+            wrap_left_symbol,
             tab_width,
             tokenization_regex,
             true_color,
@@ -192,6 +198,10 @@ pub fn set_options(
         true
     );
 
+    // Setting ComputedValues
+    set_widths_and_isatty(opt);
+    set_true_color(opt);
+    theme::set__is_light_mode__syntax_theme__syntax_set(opt, assets);
     opt.computed.inspect_raw_lines =
         cli::InspectRawLines::from_str(&opt.inspect_raw_lines).unwrap();
     opt.computed.paging_mode = parse_paging_mode(&opt.paging_mode);
@@ -216,12 +226,11 @@ fn set__light__dark__syntax_theme__options(
 ) {
     let validate_light_and_dark = |opt: &cli::Opt| {
         if opt.light && opt.dark {
-            eprintln!("--light and --dark cannot be used together.");
-            process::exit(1);
+            fatal("--light and --dark cannot be used together.");
         }
     };
     let empty_builtin_features = HashMap::new();
-    validate_light_and_dark(&opt);
+    validate_light_and_dark(opt);
     if !(opt.light || opt.dark) {
         set_options!(
             [dark, light],
@@ -233,7 +242,7 @@ fn set__light__dark__syntax_theme__options(
             false
         );
     }
-    validate_light_and_dark(&opt);
+    validate_light_and_dark(opt);
     set_options!(
         [syntax_theme],
         opt,
@@ -303,11 +312,11 @@ fn gather_features(
 
     // Gather features from command line.
     if let Some(git_config) = git_config {
-        for feature in split_feature_string(&opt.features.to_lowercase()) {
-            gather_features_recursively(feature, &mut features, &builtin_features, opt, git_config);
+        for feature in split_feature_string(&opt.features) {
+            gather_features_recursively(feature, &mut features, builtin_features, opt, git_config);
         }
     } else {
-        for feature in split_feature_string(&opt.features.to_lowercase()) {
+        for feature in split_feature_string(&opt.features) {
             features.push_front(feature.to_string());
         }
     }
@@ -315,44 +324,39 @@ fn gather_features(
     // Gather builtin feature flags supplied on command line.
     // TODO: Iterate over programatically-obtained names of builtin features.
     if opt.raw {
-        gather_builtin_features_recursively("raw", &mut features, &builtin_features, opt);
+        gather_builtin_features_recursively("raw", &mut features, builtin_features, opt);
     }
     if opt.color_only {
-        gather_builtin_features_recursively("color-only", &mut features, &builtin_features, opt);
+        gather_builtin_features_recursively("color-only", &mut features, builtin_features, opt);
     }
     if opt.diff_highlight {
-        gather_builtin_features_recursively(
-            "diff-highlight",
-            &mut features,
-            &builtin_features,
-            opt,
-        );
+        gather_builtin_features_recursively("diff-highlight", &mut features, builtin_features, opt);
     }
     if opt.diff_so_fancy {
-        gather_builtin_features_recursively("diff-so-fancy", &mut features, &builtin_features, opt);
+        gather_builtin_features_recursively("diff-so-fancy", &mut features, builtin_features, opt);
     }
     if opt.hyperlinks {
-        gather_builtin_features_recursively("hyperlinks", &mut features, &builtin_features, opt);
+        gather_builtin_features_recursively("hyperlinks", &mut features, builtin_features, opt);
     }
     if opt.line_numbers {
-        gather_builtin_features_recursively("line-numbers", &mut features, &builtin_features, opt);
+        gather_builtin_features_recursively("line-numbers", &mut features, builtin_features, opt);
     }
     if opt.navigate {
-        gather_builtin_features_recursively("navigate", &mut features, &builtin_features, opt);
+        gather_builtin_features_recursively("navigate", &mut features, builtin_features, opt);
     }
     if opt.side_by_side {
-        gather_builtin_features_recursively("side-by-side", &mut features, &builtin_features, opt);
+        gather_builtin_features_recursively("side-by-side", &mut features, builtin_features, opt);
     }
 
     if let Some(git_config) = git_config {
         // Gather features from [delta] section if --features was not passed.
         if opt.features.is_empty() {
             if let Some(feature_string) = git_config.get::<String>("delta.features") {
-                for feature in split_feature_string(&feature_string.to_lowercase()) {
+                for feature in split_feature_string(&feature_string) {
                     gather_features_recursively(
                         feature,
                         &mut features,
-                        &builtin_features,
+                        builtin_features,
                         opt,
                         git_config,
                     )
@@ -363,7 +367,7 @@ fn gather_features(
         gather_builtin_features_from_flags_in_gitconfig(
             "delta",
             &mut features,
-            &builtin_features,
+            builtin_features,
             opt,
             git_config,
         );
@@ -489,11 +493,10 @@ impl FromStr for cli::InspectRawLines {
             "true" => Ok(Self::True),
             "false" => Ok(Self::False),
             _ => {
-                eprintln!(
+                fatal(format!(
                     r#"Invalid value for inspect-raw-lines option: {}. Valid values are "true", and "false"."#,
                     s
-                );
-                process::exit(1);
+                ));
             }
         }
     }
@@ -505,45 +508,77 @@ fn parse_paging_mode(paging_mode_string: &str) -> PagingMode {
         "never" => PagingMode::Never,
         "auto" => PagingMode::QuitIfOneScreen,
         _ => {
-            eprintln!(
+            fatal(format!(
                 "Invalid value for --paging option: {} (valid values are \"always\", \"never\", and \"auto\")",
                 paging_mode_string
-            );
-            process::exit(1);
+            ));
         }
     }
 }
 
-fn set_widths(
-    opt: &mut cli::Opt,
-    git_config: &mut Option<GitConfig>,
-    arg_matches: &clap::ArgMatches,
-    option_names: &HashMap<&str, &str>,
-) {
-    // Allow one character in case e.g. `less --status-column` is in effect. See #41 and #10.
-    opt.computed.available_terminal_width = (Term::stdout().size().1 - 1) as usize;
+fn parse_width_specifier(width_arg: &str, terminal_width: usize) -> Result<usize, String> {
+    let width_arg = width_arg.trim();
 
-    let empty_builtin_features = HashMap::new();
-    if opt.width.is_none() {
-        set_options!(
-            [width],
-            opt,
-            &empty_builtin_features,
-            git_config,
-            arg_matches,
-            option_names,
-            false
-        );
-    }
+    let parse = |width: &str, must_be_negative, subexpression| -> Result<isize, String> {
+        let remove_spaces = |s: &str| s.chars().filter(|c| c != &' ').collect::<String>();
+        match remove_spaces(width).parse() {
+            Ok(val) if must_be_negative && val > 0 => Err(()),
+            Err(_) => Err(()),
+            Ok(ok) => Ok(ok),
+        }
+        .map_err(|_| {
+            let pos = if must_be_negative { " negative" } else { "n" };
+            let subexpr = if subexpression {
+                format!(" (from {:?})", width_arg)
+            } else {
+                "".into()
+            };
+            format!(
+                "{:?}{subexpr} is not a{pos} integer",
+                width,
+                subexpr = subexpr,
+                pos = pos
+            )
+        })
+    };
+
+    let width = match width_arg.find('-') {
+        None => parse(width_arg, false, false)?.try_into().unwrap(),
+        Some(index) if index == 0 => (terminal_width as isize + parse(width_arg, true, false)?)
+            .try_into()
+            .map_err(|_| {
+                format!(
+                    "the current terminal width of {} minus {} is negative",
+                    terminal_width,
+                    &width_arg[1..].trim(),
+                )
+            })?,
+        Some(index) => {
+            let a = parse(&width_arg[0..index], false, true)?;
+            let b = parse(&width_arg[index..], true, true)?;
+            (a + b)
+                .try_into()
+                .map_err(|_| format!("expression {:?} is not positive", width_arg))?
+        }
+    };
+
+    Ok(width)
+}
+
+fn set_widths_and_isatty(opt: &mut cli::Opt) {
+    let term_stdout = Term::stdout();
+    opt.computed.stdout_is_term = term_stdout.is_term();
+
+    // If one extra character for e.g. `less --status-column` is required use "-1"
+    // as an argument, also see #41, #10, #115 and #727.
+    opt.computed.available_terminal_width = term_stdout.size().1 as usize;
 
     let (decorations_width, background_color_extends_to_terminal_width) = match opt.width.as_deref()
     {
         Some("variable") => (cli::Width::Variable, false),
         Some(width) => {
-            let width = width.parse().unwrap_or_else(|_| {
-                eprintln!("Could not parse width as a positive integer: {:?}", width);
-                process::exit(1);
-            });
+            let width = parse_width_specifier(width, opt.computed.available_terminal_width)
+                .unwrap_or_else(|err| fatal(format!("Invalid value for width: {}", err)));
             (cli::Width::Fixed(width), true)
         }
         None => (
@@ -564,16 +599,16 @@ fn set_true_color(opt: &mut cli::Opt) {
             opt.true_color = _24_bit_color.clone();
         }
     }
+
     opt.computed.true_color = match opt.true_color.as_ref() {
         "always" => true,
         "never" => false,
         "auto" => is_truecolor_terminal(),
         _ => {
-            eprintln!(
+            fatal(format!(
                 "Invalid value for --true-color option: {} (valid values are \"always\", \"never\", and \"auto\")",
                 opt.true_color
-            );
-            process::exit(1);
+            ));
         }
     };
 }
@@ -585,21 +620,10 @@ fn is_truecolor_terminal() -> bool {
 }
 
 fn set_git_config_entries(opt: &mut cli::Opt, git_config: &mut GitConfig) {
-    // Styles
     for key in &["color.diff.old", "color.diff.new"] {
         if let Some(style_string) = git_config.get::<String>(key) {
             opt.git_config_entries
                 .insert(key.to_string(), GitConfigEntry::Style(style_string));
-        }
-    }
-
-    // Strings
-    for key in &["remote.origin.url"] {
-        if let Some(string) = git_config.get::<String>(key) {
-            if let Ok(repo) = GitRemoteRepo::from_str(&string) {
-                opt.git_config_entries
-                    .insert(key.to_string(), GitConfigEntry::GitRemote(repo));
-            }
         }
     }
 
@@ -631,6 +655,7 @@ pub mod tests {
     commit-decoration-style = black black
     commit-style = black black
     dark = false
+    default-language = rs
     diff-highlight = true
     diff-so-fancy = true
     features = xxxyyyzzz
@@ -688,6 +713,7 @@ pub mod tests {
         assert_eq!(opt.commit_decoration_style, "black black");
         assert_eq!(opt.commit_style, "black black");
         assert_eq!(opt.dark, false);
+        assert_eq!(opt.default_language, Some("rs".to_owned()));
         // TODO: should set_options not be called on any feature flags?
         // assert_eq!(opt.diff_highlight, true);
         // assert_eq!(opt.diff_so_fancy, true);
@@ -726,6 +752,7 @@ pub mod tests {
         assert_eq!(opt.side_by_side, true);
         assert_eq!(opt.syntax_theme, Some("xxxyyyzzz".to_string()));
         assert_eq!(opt.tab_width, 77);
+        assert_eq!(opt.true_color, "never");
         assert_eq!(opt.whitespace_error_style, "black black");
         assert_eq!(opt.width, Some("77".to_string()));
         assert_eq!(opt.tokenization_regex, "xxxyyyzzz");
@@ -756,5 +783,41 @@ pub mod tests {
         assert_eq!(opt.computed.decorations_width, cli::Width::Variable);
 
         remove_file(git_config_path).unwrap();
+    }
+
+    #[test]
+    fn test_parse_width_specifier() {
+        use super::parse_width_specifier;
+        let term_width = 12;
+
+        let assert_failure_containing = |x, errmsg| {
+            assert!(parse_width_specifier(x, term_width)
+                .unwrap_err()
+                .contains(errmsg));
+        };
+
+        assert_failure_containing("", "is not an integer");
+        assert_failure_containing("foo", "is not an integer");
+        assert_failure_containing("123foo", "is not an integer");
+        assert_failure_containing("+12bar", "is not an integer");
+        assert_failure_containing("-456bar", "is not a negative integer");
+
+        assert_failure_containing("-13", "minus 13 is negative");
+        assert_failure_containing(" -   13 ", "minus 13 is negative");
+        assert_failure_containing("12-13", "expression");
+        assert_failure_containing(" 12   -   13  ", "expression \"12   -   13\" is not");
+        assert_failure_containing("12+foo", "is not an integer");
+        assert_failure_containing(
+            "  12 -  bar  ",
+            "\"-  bar\" (from \"12 -  bar\") is not a negative integer",
+        );
+
+        assert_eq!(parse_width_specifier("1", term_width).unwrap(), 1);
+        assert_eq!(parse_width_specifier(" 1 ", term_width).unwrap(), 1);
+        assert_eq!(parse_width_specifier("-2", term_width).unwrap(), 10);
+        assert_eq!(parse_width_specifier(" - 2", term_width).unwrap(), 10);
+        assert_eq!(parse_width_specifier("-12", term_width).unwrap(), 0);
+        assert_eq!(parse_width_specifier(" - 12 ", term_width).unwrap(), 0);
+        assert_eq!(parse_width_specifier(" 2 - 2 ", term_width).unwrap(), 0);
     }
 }

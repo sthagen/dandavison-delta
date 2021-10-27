@@ -1,13 +1,14 @@
-FROM ubuntu:20.04
+FROM ubuntu:latest
 
 RUN apt-get update && \
-    apt-get install -y curl git less
+    apt-get install -y curl git less gcc
 
-RUN curl -OL https://github.com/dandavison/delta/releases/download/0.4.5/delta-0.4.5-x86_64-unknown-linux-gnu.tar.gz && \
-    tar -xzvf delta-0.4.5-x86_64-unknown-linux-gnu.tar.gz
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
 
-WORKDIR delta-0.4.5-x86_64-unknown-linux-gnu
+RUN git clone https://github.com/dandavison/delta.git
+WORKDIR delta
+RUN /root/.cargo/bin/cargo build --release
 
-ENV PATH="${PWD}:${PATH}"
+ENV PATH="${PWD}/target/release:${PATH}"
 
 CMD delta

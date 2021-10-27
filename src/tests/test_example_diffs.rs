@@ -201,6 +201,16 @@ mod tests {
     }
 
     #[test]
+    fn test_submodule_diff_log() {
+        // See etc/examples/662-submodules
+        // diff.submodule = log
+        let config = integration_test_utils::make_config_from_args(&["--width", "49"]);
+        let output = integration_test_utils::run_delta(SUBMODULE_DIFF_LOG, &config);
+        let output = strip_ansi_codes(&output);
+        assert_eq!(output, SUBMODULE_DIFF_LOG_EXPECTED_OUTPUT);
+    }
+
+    #[test]
     fn test_submodule_contains_untracked_content() {
         let config = integration_test_utils::make_config_from_args(&[]);
         let output =
@@ -294,6 +304,16 @@ commit 94907c0f136f46dc46ffae2dc92dca9af7eb7c2e
             "bold 31",
             &config,
         );
+    }
+
+    #[test]
+    fn test_orphan_carriage_return_is_stripped() {
+        let config = integration_test_utils::make_config_from_args(&[]);
+        let output = integration_test_utils::run_delta(
+            GIT_DIFF_SINGLE_HUNK_WITH_SEQUENCE_OF_CR_ESCAPE_SEQUENCES_LF,
+            &config,
+        );
+        assert!(output.bytes().all(|b: u8| b != b'\r'));
     }
 
     #[test]
@@ -1366,7 +1386,7 @@ src/align.rs:71: impl<'a> Alignment<'a> { │
             4,
             "impl<'a> Alignment<'a> { ",
             "rs",
-            State::HunkHeader,
+            State::HunkHeader("".to_owned(), "".to_owned()),
             &config,
         );
         ansi_test_utils::assert_line_has_no_color(&output, 12, "─────────────────────────────┘");
@@ -1462,14 +1482,7 @@ src/align.rs:71: impl<'a> Alignment<'a> { │
                     .to_string()
             );
         } else {
-            let style = style::Style::from_str(empty_line_marker_style, None, None, true, false);
-            assert_eq!(
-                line,
-                &style
-                    .ansi_term_style
-                    .paint(ansi::ANSI_CSI_CLEAR_TO_BOL)
-                    .to_string()
-            );
+            assert_eq!(line, "");
         }
     }
 
@@ -1708,6 +1721,20 @@ Date:   Thu May 14 11:13:17 2020 -0400
  #[allow(dead_code)][m
 ";
 
+    const GIT_DIFF_SINGLE_HUNK_WITH_SEQUENCE_OF_CR_ESCAPE_SEQUENCES_LF: &str = "\
+[1mdiff --git a/src/main.rs b/src/main.rs[m
+[1mindex f346a8c..e443b63 100644[m
+[1m--- a/src/main.rs[m
+[1m+++ b/src/main.rs[m
+[36m@@ -1,5 +1,4 @@[m
+[31m-deleted line[m\r
+[31m-[m\r
+ fn main() {[m\r
+     println!(\"existing line\");[m\r
+[32m+[m[32m    println!(\"added line\");[m[41m\r[m
+ }[m\r
+";
+
     const DIFF_IN_DIFF: &str = "\
 diff --git a/0001-Init.patch b/0001-Init.patch
 deleted file mode 100644
@@ -1883,6 +1910,62 @@ This is a regular file that contains:
  Some text here
 -Some text with a minus
 +Some text with a plus
+";
+
+    // See etc/examples/662-submodules
+    // diff.submodule = log
+    const SUBMODULE_DIFF_LOG: &str = "\
+commit ccb444baa861fdcb14d411b471a74614ed28776d
+Author: Dan Davison <dandavison7@gmail.com>
+Date:   Sat Aug 21 18:56:34 2021 -0700
+
+    Update all submodules
+
+Submodule submoduleA f4f55af..310b551 (rewind):
+  < Submodule A extra change 2
+  < Submodule A extra change 1
+  < Submodule A initial commit 4
+  < Submodule A initial commit 3
+Submodule submoduleB 0ffa700..0c8b00d:
+  > Submodule B stage change 3
+  > Submodule B stage change 2
+  > Submodule B stage change 1
+Submodule submoduleC 9f3b744...e04f848:
+  > Submodule C stage change 3
+  > Submodule C stage change 2
+  < Submodule C extra change 2
+  > Submodule C stage change 1
+  < Submodule C extra change 1
+";
+
+    const SUBMODULE_DIFF_LOG_EXPECTED_OUTPUT: &str = "\
+commit ccb444baa861fdcb14d411b471a74614ed28776d
+Author: Dan Davison <dandavison7@gmail.com>
+Date:   Sat Aug 21 18:56:34 2021 -0700
+
+    Update all submodules
+
+
+Submodule submoduleA f4f55af..310b551 (rewind):
+─────────────────────────────────────────────────
+  < Submodule A extra change 2
+  < Submodule A extra change 1
+  < Submodule A initial commit 4
+  < Submodule A initial commit 3
+
+Submodule submoduleB 0ffa700..0c8b00d:
+─────────────────────────────────────────────────
+  > Submodule B stage change 3
+  > Submodule B stage change 2
+  > Submodule B stage change 1
+
+Submodule submoduleC 9f3b744...e04f848:
+─────────────────────────────────────────────────
+  > Submodule C stage change 3
+  > Submodule C stage change 2
+  < Submodule C extra change 2
+  > Submodule C stage change 1
+  < Submodule C extra change 1
 ";
 
     const SUBMODULE_CONTAINS_UNTRACKED_CONTENT_INPUT: &str = "\

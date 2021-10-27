@@ -79,11 +79,11 @@ pub trait GetOptionValue {
                 return Some(value);
             }
         }
-        for feature in opt.features.to_lowercase().split_whitespace().rev() {
+        for feature in opt.features.split_whitespace().rev() {
             match Self::get_provenanced_value_for_feature(
                 option_name,
-                &feature,
-                &builtin_features,
+                feature,
+                builtin_features,
                 opt,
                 git_config,
             ) {
@@ -120,7 +120,7 @@ pub trait GetOptionValue {
         }
         if let Some(builtin_feature) = builtin_features.get(feature) {
             if let Some(value_function) = builtin_feature.get(option_name) {
-                return Some(value_function(opt, &git_config));
+                return Some(value_function(opt, git_config));
             }
         }
         None
@@ -316,6 +316,9 @@ pub mod tests {
     light = true
     dark = true
 
+[delta "Uppercase-Theme"]
+    light = true
+
 [delta "not-a-theme"]
     max-line-distance = 0.6
 "#;
@@ -331,7 +334,12 @@ pub mod tests {
 
         assert_eq!(
             themes,
-            ["dark-theme", "light-and-dark-theme", "light-theme",]
+            [
+                "dark-theme",
+                "light-and-dark-theme",
+                "light-theme",
+                "Uppercase-Theme"
+            ]
         );
 
         remove_file(git_config_path).unwrap();

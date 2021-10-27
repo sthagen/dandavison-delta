@@ -1,5 +1,4 @@
 use std::collections::HashMap;
-use std::process;
 use std::str::FromStr;
 
 use ansi_term::Color;
@@ -7,23 +6,23 @@ use lazy_static::lazy_static;
 use syntect::highlighting::Color as SyntectColor;
 
 use crate::bat_utils::terminal::to_ansi_color;
-use crate::syntect_color;
+use crate::fatal;
+use crate::syntect_utils;
 
 pub fn parse_color(s: &str, true_color: bool) -> Option<Color> {
     if s == "normal" {
         return None;
     }
     let die = || {
-        eprintln!("Invalid color or style attribute: {}", s);
-        process::exit(1);
+        fatal(format!("Invalid color or style attribute: {}", s));
     };
     let syntect_color = if s.starts_with('#') {
         SyntectColor::from_str(s).unwrap_or_else(|_| die())
     } else {
         s.parse::<u8>()
             .ok()
-            .and_then(syntect_color::syntect_color_from_ansi_number)
-            .or_else(|| syntect_color::syntect_color_from_ansi_name(s))
+            .and_then(syntect_utils::syntect_color_from_ansi_number)
+            .or_else(|| syntect_utils::syntect_color_from_ansi_name(s))
             .unwrap_or_else(die)
     };
     to_ansi_color(syntect_color, true_color)
@@ -90,7 +89,7 @@ pub fn ansi_16_color_name_to_number(name: &str) -> Option<u8> {
 fn ansi_16_color_number_to_name(n: u8) -> Option<&'static str> {
     for (k, _n) in &*ANSI_16_COLORS {
         if *_n == n {
-            return Some(&*k);
+            return Some(*k);
         }
     }
     None
