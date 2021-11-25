@@ -1,13 +1,17 @@
 /// This module contains functions handling input lines encountered during the
 /// main `StateMachine::consume()` loop.
+pub mod blame;
 pub mod commit_meta;
 pub mod diff_stat;
 pub mod draw;
 pub mod file_meta;
 pub mod file_meta_diff;
 pub mod file_meta_misc;
+pub mod git_show_file;
+pub mod grep;
 pub mod hunk;
 pub mod hunk_header;
+mod ripgrep_json;
 pub mod submodule;
 
 use crate::delta::{State, StateMachine};

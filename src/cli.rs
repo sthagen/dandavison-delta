@@ -8,10 +8,10 @@ use structopt::{clap, StructOpt};
 use syntect::highlighting::Theme as SyntaxTheme;
 use syntect::parsing::SyntaxSet;
 
-use crate::bat_utils::assets::HighlightingAssets;
-use crate::bat_utils::output::PagingMode;
 use crate::git_config::{GitConfig, GitConfigEntry};
 use crate::options;
+use crate::utils::bat::assets::HighlightingAssets;
+use crate::utils::bat::output::PagingMode;
 
 // No Default trait as this ignores `default_value = ..`
 #[derive(StructOpt)]
@@ -114,15 +114,19 @@ A complete description of the style string syntax follows:
 COLORS
 ------
 
-There are three ways to specify a color (this section applies to foreground and background colors
+There are four ways to specify a color (this section applies to foreground and background colors
 within a style string):
 
-1. RGB hex code
+1. CSS color name
+
+   Any of the 140 color names used in CSS: https://www.w3schools.com/colors/colors_groups.asp
+
+2. RGB hex code
 
    An example of using an RGB hex code is:
    --file-style=\"#0e7c0e\"
 
-2. ANSI color name
+3. ANSI color name
 
    There are 8 ANSI color names:
    black, red, green, yellow, blue, magenta, cyan, white.
@@ -141,7 +145,7 @@ within a style string):
 
    \"purple\" is accepted as a synonym for \"magenta\". Color names and codes are case-insensitive.
 
-3. ANSI color number
+4. ANSI color number
 
    An example of using an ANSI color number is:
    --file-style=28
@@ -290,6 +294,17 @@ pub struct Opt {
     #[structopt(long = "show-themes")]
     pub show_themes: bool,
 
+    /// Show available named colors. In addition to named colors, arbitrary
+    /// colors can be specified using RGB hex codes. See COLORS section.
+    #[structopt(long = "show-colors")]
+    pub show_colors: bool,
+
+    /// Parse ANSI color escape sequences in input and display them as git style
+    /// strings. Example usage: git show --color=always | delta --parse-ansi
+    /// This can be used to help identify input style strings to use with map-styles.
+    #[structopt(long = "parse-ansi")]
+    pub parse_ansi: bool,
+
     #[structopt(long = "no-gitconfig")]
     /// Do not take any settings from git config. See GIT CONFIG section.
     pub no_gitconfig: bool,
@@ -334,9 +349,9 @@ pub struct Opt {
     /// STYLES section.
     pub minus_emph_style: String,
 
-    #[structopt(long = "minus-non-emph-style", default_value = "auto auto")]
+    #[structopt(long = "minus-non-emph-style", default_value = "minus-style")]
     /// Style (foreground, background, attributes) for non-emphasized sections of removed lines
-    /// that have an emphasized section. Defaults to --minus-style. See STYLES section.
+    /// that have an emphasized section. See STYLES section.
     pub minus_non_emph_style: String,
 
     #[structopt(long = "plus-emph-style", default_value = "syntax auto")]
@@ -344,9 +359,9 @@ pub struct Opt {
     /// STYLES section.
     pub plus_emph_style: String,
 
-    #[structopt(long = "plus-non-emph-style", default_value = "auto auto")]
+    #[structopt(long = "plus-non-emph-style", default_value = "plus-style")]
     /// Style (foreground, background, attributes) for non-emphasized sections of added lines that
-    /// have an emphasized section. Defaults to --plus-style. See STYLES section.
+    /// have an emphasized section. See STYLES section.
     pub plus_non_emph_style: String,
 
     #[structopt(long = "commit-style", default_value = "raw")]
@@ -419,6 +434,67 @@ pub struct Opt {
     /// section. The style string should contain one of the special attributes 'box', 'ul'
     /// (underline), 'ol' (overline), or the combination 'ul ol'.
     pub hunk_header_decoration_style: String,
+
+    #[structopt(long = "map-styles")]
+    /// A string specifying a mapping styles encountered in raw input to desired
+    /// output styles. An example is
+    /// --map-styles='bold purple => red "#eeeeee", bold cyan => syntax "#eeeeee"'
+    pub map_styles: Option<String>,
+
+    /// Format string for git blame commit metadata. Available placeholders are
+    /// "{timestamp}", "{author}", and "{commit}".
+    #[structopt(
+        long = "blame-format",
+        default_value = "{timestamp:<15} {author:<15.14} {commit:<8} │ "
+    )]
+    pub blame_format: String,
+
+    /// Background colors used for git blame lines (space-separated string).
+    /// Lines added by the same commit are painted with the same color; colors
+    /// are recycled as needed.
+    #[structopt(long = "blame-palette")]
+    pub blame_palette: Option<String>,
+
+    /// Format of `git blame` timestamp in raw git output received by delta.
+    #[structopt(
+        long = "blame-timestamp-format",
+        default_value = "%Y-%m-%d %H:%M:%S %z"
+    )]
+    pub blame_timestamp_format: String,
+
+    #[structopt(long = "grep-match-line-style")]
+    /// Style (foreground, background, attributes) for matching lines of code in
+    /// grep output. See STYLES section. Defaults to plus-style.
+    pub grep_match_line_style: Option<String>,
+
+    #[structopt(long = "grep-match-word-style")]
+    /// Style (foreground, background, attributes) for the specific matching
+    /// substrings within a matching line of code in grep output. See STYLES
+    /// section. Defaults to plus-style.
+    pub grep_match_word_style: Option<String>,
+
+    #[structopt(long = "grep-context-line-style")]
+    /// Style (foreground, background, attributes) for non-matching lines of
+    /// code in grep output. See STYLES section. Defaults to zero-style.
+    pub grep_context_line_style: Option<String>,
+
+    #[structopt(long = "grep-file-style")]
+    /// Style (foreground, background, attributes) for file paths in grep
+    /// output. See STYLES section. Defaults to hunk-header-file-path-style.
+    pub grep_file_style: Option<String>,
+
+    #[structopt(long = "grep-line-number-style")]
+    /// Style (foreground, background, attributes) for line numbers in grep
+    /// output. See STYLES section. Defaults to hunk-header-line-number-style.
+    pub grep_line_number_style: Option<String>,
+
+    #[structopt(long = "grep-separator-symbol", default_value = ":")]
+    /// Symbol used in grep output to separate file path (and line number) from
+    /// the line of file contents. Defaults to ":" for both match and context
+    /// lines, since many terminal emulators recognize constructs like
+    /// "/path/to/file:7:". However, standard grep output uses "-" for context
+    /// lines: set this option to "keep" to keep the original separator symbols.
+    pub grep_separator_symbol: String,
 
     /// Default language used for syntax highlighting when this cannot be
     /// inferred from a filename. It will typically make sense to set this in
@@ -509,6 +585,10 @@ pub struct Opt {
     #[structopt(long = "wrap-right-prefix-symbol", default_value = "…")]
     pub wrap_right_prefix_symbol: String,
 
+    #[structopt(long = "navigate-regex")]
+    /// A regexp to use in the less pager when navigating (auto-generated when unspecified)
+    pub navigate_regex: Option<String>,
+
     #[structopt(long = "file-modified-label", default_value = "")]
     /// Text to display in front of a modified file path.
     pub file_modified_label: String,
@@ -528,6 +608,10 @@ pub struct Opt {
     #[structopt(long = "file-renamed-label", default_value = "renamed:")]
     /// Text to display in front of a renamed file path.
     pub file_renamed_label: String,
+
+    #[structopt(long = "right-arrow", default_value = "⟶  ")]
+    /// Text to display with a changed value such as a diff heading, a rename, or a chmod.
+    pub right_arrow: String,
 
     #[structopt(long = "hunk-label", default_value = "")]
     /// Text to display in front of a hunk header.

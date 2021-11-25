@@ -27,8 +27,7 @@ use regex::Regex;
 use super::draw;
 use crate::config::Config;
 use crate::delta::{self, State, StateMachine};
-use crate::features;
-use crate::paint::{BgShouldFill, Painter};
+use crate::paint::{self, BgShouldFill, Painter, StyleSectionSpecifier};
 use crate::style::DecorationStyle;
 
 impl<'a> StateMachine<'a> {
@@ -155,7 +154,7 @@ fn write_hunk_header_raw(
     Ok(())
 }
 
-fn write_hunk_header(
+pub fn write_hunk_header(
     code_fragment: &str,
     line_numbers: &[(usize, usize)],
     painter: &mut Painter,
@@ -166,14 +165,16 @@ fn write_hunk_header(
     let (mut draw_fn, _, decoration_ansi_term_style) =
         draw::get_draw_function(config.hunk_header_style.decoration_style);
     let line = if config.color_only {
-        format!(" {}", &line)
+        line.to_string()
     } else if !code_fragment.is_empty() {
         format!("{} ", code_fragment)
     } else {
         "".to_string()
     };
 
-    let file_with_line_number = get_painted_file_with_line_number(line_numbers, plus_file, config);
+    let plus_line_number = line_numbers[line_numbers.len() - 1].0;
+    let file_with_line_number =
+        paint_file_path_with_line_number(Some(plus_line_number), plus_file, config);
 
     if !line.is_empty() || !file_with_line_number.is_empty() {
         write_to_output_buffer(&file_with_line_number, line, painter, config);
@@ -191,41 +192,36 @@ fn write_hunk_header(
     Ok(())
 }
 
-fn get_painted_file_with_line_number(
-    line_numbers: &[(usize, usize)],
+fn paint_file_path_with_line_number(
+    line_number: Option<usize>,
     plus_file: &str,
     config: &Config,
 ) -> String {
-    let mut file_with_line_number = Vec::new();
-    let plus_line_number = line_numbers[line_numbers.len() - 1].0;
-    if config.hunk_header_style_include_file_path {
-        file_with_line_number.push(config.hunk_header_file_style.paint(plus_file))
+    let file_style = if config.hunk_header_style_include_file_path {
+        Some(config.hunk_header_file_style)
+    } else {
+        None
     };
-    if config.hunk_header_style_include_line_number
+    let line_number_style = if config.hunk_header_style_include_line_number
         && !config.hunk_header_style.is_raw
         && !config.color_only
+        && line_number.is_some()
     {
-        if !file_with_line_number.is_empty() {
-            file_with_line_number.push(ansi_term::ANSIString::from(":"));
-        }
-        file_with_line_number.push(
-            config
-                .hunk_header_line_number_style
-                .paint(format!("{}", plus_line_number)),
-        )
-    }
-    let file_with_line_number = ansi_term::ANSIStrings(&file_with_line_number).to_string();
-    if config.hyperlinks && !file_with_line_number.is_empty() {
-        features::hyperlinks::format_osc8_file_hyperlink(
-            plus_file,
-            Some(plus_line_number),
-            &file_with_line_number,
-            config,
-        )
-        .into()
+        Some(config.hunk_header_line_number_style)
     } else {
-        file_with_line_number
-    }
+        None
+    };
+
+    paint::paint_file_path_with_line_number(
+        line_number,
+        plus_file,
+        false,
+        ":",
+        false,
+        file_style,
+        line_number_style,
+        config,
+    )
 }
 
 fn write_to_output_buffer(
@@ -234,7 +230,7 @@ fn write_to_output_buffer(
     painter: &mut Painter,
     config: &Config,
 ) {
-    if config.navigate {
+    if !config.hunk_label.is_empty() {
         let _ = write!(
             &mut painter.output_buffer,
             "{} ",
@@ -242,12 +238,19 @@ fn write_to_output_buffer(
         );
     }
     if !file_with_line_number.is_empty() {
-        let _ = write!(&mut painter.output_buffer, "{}: ", file_with_line_number);
+        // The code fragment in "line" adds whitespace, but if only a line number is printed
+        // then the trailing space must be added.
+        let space = if line.is_empty() { " " } else { "" };
+        let _ = write!(
+            &mut painter.output_buffer,
+            "{}:{}",
+            file_with_line_number, space
+        );
     }
     if !line.is_empty() {
         painter.syntax_highlight_and_paint_line(
             &line,
-            config.hunk_header_style,
+            StyleSectionSpecifier::Style(config.hunk_header_style),
             delta::State::HunkHeader("".to_owned(), "".to_owned()),
             BgShouldFill::No,
         );
@@ -311,25 +314,25 @@ pub mod tests {
         assert_eq!(line_numbers_and_hunk_lengths[2], (358, 16),);
     }
     #[test]
-    fn test_get_painted_file_with_line_number_default() {
+    fn test_paint_file_path_with_line_number_default() {
         let cfg = integration_test_utils::make_config_from_args(&[]);
 
-        let result = get_painted_file_with_line_number(&vec![(3, 4)], "some-file", &cfg);
+        let result = paint_file_path_with_line_number(Some(3), "some-file", &cfg);
 
         assert_eq!(result, "\u{1b}[34m3\u{1b}[0m");
     }
 
     #[test]
-    fn test_get_painted_file_with_line_number_hyperlinks() {
+    fn test_paint_file_path_with_line_number_hyperlinks() {
         let cfg = integration_test_utils::make_config_from_args(&["--features", "hyperlinks"]);
 
-        let result = get_painted_file_with_line_number(&vec![(3, 4)], "some-file", &cfg);
+        let result = paint_file_path_with_line_number(Some(3), "some-file", &cfg);
 
         assert_eq!(result, "some-file");
     }
 
     #[test]
-    fn test_get_painted_file_with_line_number_empty() {
+    fn test_paint_file_path_with_line_number_empty() {
         let cfg = integration_test_utils::make_config_from_args(&[
             "--hunk-header-style",
             "syntax bold",
@@ -337,13 +340,13 @@ pub mod tests {
             "omit",
         ]);
 
-        let result = get_painted_file_with_line_number(&vec![(3, 4)], "some-file", &cfg);
+        let result = paint_file_path_with_line_number(Some(3), "some-file", &cfg);
 
         assert_eq!(result, "");
     }
 
     #[test]
-    fn test_get_painted_file_with_line_number_empty_hyperlinks() {
+    fn test_paint_file_path_with_line_number_empty_hyperlinks() {
         let cfg = integration_test_utils::make_config_from_args(&[
             "--hunk-header-style",
             "syntax bold",
@@ -353,13 +356,13 @@ pub mod tests {
             "hyperlinks",
         ]);
 
-        let result = get_painted_file_with_line_number(&vec![(3, 4)], "some-file", &cfg);
+        let result = paint_file_path_with_line_number(Some(3), "some-file", &cfg);
 
         assert_eq!(result, "");
     }
 
     #[test]
-    fn test_get_painted_file_with_line_number_empty_navigate() {
+    fn test_paint_file_path_with_line_number_empty_navigate() {
         let cfg = integration_test_utils::make_config_from_args(&[
             "--hunk-header-style",
             "syntax bold",
@@ -368,7 +371,7 @@ pub mod tests {
             "--navigate",
         ]);
 
-        let result = get_painted_file_with_line_number(&vec![(3, 4)], "δ some-file", &cfg);
+        let result = paint_file_path_with_line_number(Some(3), "δ some-file", &cfg);
 
         assert_eq!(result, "");
     }

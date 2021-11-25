@@ -6,8 +6,6 @@ use std::str::FromStr;
 use console::Term;
 use structopt::clap;
 
-use crate::bat_utils::assets::HighlightingAssets;
-use crate::bat_utils::output::PagingMode;
 use crate::cli;
 use crate::config;
 use crate::env;
@@ -17,6 +15,8 @@ use crate::features;
 use crate::git_config::{GitConfig, GitConfigEntry};
 use crate::options::option_value::{OptionValue, ProvenancedOptionValue};
 use crate::options::theme;
+use crate::utils::bat::assets::HighlightingAssets;
+use crate::utils::bat::output::PagingMode;
 
 macro_rules! set_options {
     ([$( $field_ident:ident ),* ],
@@ -122,6 +122,9 @@ pub fn set_options(
 
     set_options!(
         [
+            blame_format,
+            blame_palette,
+            blame_timestamp_format,
             color_only,
             commit_decoration_style,
             commit_regex,
@@ -134,8 +137,15 @@ pub fn set_options(
             file_modified_label,
             file_removed_label,
             file_renamed_label,
+            right_arrow,
             hunk_label,
             file_style,
+            grep_context_line_style,
+            grep_file_style,
+            grep_line_number_style,
+            grep_match_line_style,
+            grep_match_word_style,
+            grep_separator_symbol,
             hunk_header_decoration_style,
             hunk_header_file_style,
             hunk_header_line_number_style,
@@ -147,6 +157,7 @@ pub fn set_options(
             inspect_raw_lines,
             keep_plus_minus_markers,
             line_buffer_size,
+            map_styles,
             max_line_distance,
             max_line_length,
             // Hack: minus-style must come before minus-*emph-style because the latter default
@@ -157,6 +168,7 @@ pub fn set_options(
             minus_non_emph_style,
             minus_non_emph_style,
             navigate,
+            navigate_regex,
             line_fill_method,
             line_numbers,
             line_numbers_left_format,
@@ -168,6 +180,7 @@ pub fn set_options(
             line_numbers_zero_style,
             pager,
             paging_mode,
+            parse_ansi,
             // Hack: plus-style must come before plus-*emph-style because the latter default
             // dynamically to the value of the former.
             plus_style,
@@ -176,6 +189,7 @@ pub fn set_options(
             plus_non_emph_style,
             raw,
             relative_paths,
+            show_colors,
             show_themes,
             side_by_side,
             wrap_max_lines,
@@ -641,9 +655,9 @@ fn set_git_config_entries(opt: &mut cli::Opt, git_config: &mut GitConfig) {
 pub mod tests {
     use std::fs::remove_file;
 
-    use crate::bat_utils::output::PagingMode;
     use crate::cli;
     use crate::tests::integration_test_utils;
+    use crate::utils::bat::output::PagingMode;
 
     #[test]
     fn test_options_can_be_set_in_git_config() {
@@ -664,6 +678,7 @@ pub mod tests {
     file-modified-label = xxxyyyzzz
     file-removed-label = xxxyyyzzz
     file-renamed-label = xxxyyyzzz
+    right-arrow = xxxyyyzzz
     file-style = black black
     hunk-header-decoration-style = black black
     hunk-header-style = black black
@@ -684,6 +699,7 @@ pub mod tests {
     minus-non-emph-style = black black
     minus-style = black black
     navigate = true
+    navigate-regex = xxxyyyzzz
     paging = never
     plus-emph-style = black black
     plus-empty-line-marker-style = black black
@@ -723,6 +739,7 @@ pub mod tests {
         assert_eq!(opt.file_modified_label, "xxxyyyzzz");
         assert_eq!(opt.file_removed_label, "xxxyyyzzz");
         assert_eq!(opt.file_renamed_label, "xxxyyyzzz");
+        assert_eq!(opt.right_arrow, "xxxyyyzzz");
         assert_eq!(opt.file_style, "black black");
         assert_eq!(opt.hunk_header_decoration_style, "black black");
         assert_eq!(opt.hunk_header_style, "black black");
@@ -743,6 +760,7 @@ pub mod tests {
         assert_eq!(opt.minus_non_emph_style, "black black");
         assert_eq!(opt.minus_style, "black black");
         assert_eq!(opt.navigate, true);
+        assert_eq!(opt.navigate_regex, Some("xxxyyyzzz".to_string()));
         assert_eq!(opt.paging_mode, "never");
         assert_eq!(opt.plus_emph_style, "black black");
         assert_eq!(opt.plus_empty_line_marker_style, "black black");

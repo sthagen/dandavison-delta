@@ -5,11 +5,11 @@ use ansi_term::Color;
 use lazy_static::lazy_static;
 use syntect::highlighting::Color as SyntectColor;
 
-use crate::bat_utils::terminal::to_ansi_color;
 use crate::fatal;
-use crate::syntect_utils;
+use crate::git_config::GitConfig;
+use crate::utils;
 
-pub fn parse_color(s: &str, true_color: bool) -> Option<Color> {
+pub fn parse_color(s: &str, true_color: bool, git_config: Option<&GitConfig>) -> Option<Color> {
     if s == "normal" {
         return None;
     }
@@ -19,13 +19,23 @@ pub fn parse_color(s: &str, true_color: bool) -> Option<Color> {
     let syntect_color = if s.starts_with('#') {
         SyntectColor::from_str(s).unwrap_or_else(|_| die())
     } else {
-        s.parse::<u8>()
+        let syntect_color = s
+            .parse::<u8>()
             .ok()
-            .and_then(syntect_utils::syntect_color_from_ansi_number)
-            .or_else(|| syntect_utils::syntect_color_from_ansi_name(s))
-            .unwrap_or_else(die)
+            .and_then(utils::syntect::syntect_color_from_ansi_number)
+            .or_else(|| utils::syntect::syntect_color_from_ansi_name(s))
+            .or_else(|| utils::syntect::syntect_color_from_name(s));
+        if syntect_color.is_none() {
+            if let Some(git_config) = git_config {
+                if let Some(val) = git_config.get::<String>(&format!("delta.{}", s)) {
+                    return parse_color(&val, true_color, None);
+                }
+            }
+            die();
+        }
+        syntect_color.unwrap()
     };
-    to_ansi_color(syntect_color, true_color)
+    utils::bat::terminal::to_ansi_color(syntect_color, true_color)
 }
 
 pub fn color_to_string(color: Color) -> String {
@@ -162,3 +172,9 @@ const DARK_THEME_PLUS_COLOR_256: Color = Color::Fixed(22);
 const DARK_THEME_PLUS_EMPH_COLOR: Color = Color::RGB(0x00, 0x60, 0x00);
 
 const DARK_THEME_PLUS_EMPH_COLOR_256: Color = Color::Fixed(28);
+
+// blame
+
+pub const LIGHT_THEME_BLAME_PALETTE: &[&str] = &["#FFFFFF", "#DDDDDD", "#BBBBBB"];
+
+pub const DARK_THEME_BLAME_PALETTE: &[&str] = &["#000000", "#222222", "#444444"];

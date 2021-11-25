@@ -1,11 +1,14 @@
 use std::io::Write;
 
-use crate::bat_utils::output::PagingMode;
+use itertools::Itertools;
+
 use crate::cli;
 use crate::config;
 use crate::features::side_by_side::{Left, Right};
 use crate::minusplus::*;
 use crate::paint::BgFillMethod;
+use crate::style;
+use crate::utils::bat::output::PagingMode;
 
 pub fn show_config(config: &config::Config, writer: &mut dyn Write) -> std::io::Result<()> {
     // styles first
@@ -23,7 +26,13 @@ pub fn show_config(config: &config::Config, writer: &mut dyn Write) -> std::io::
     plus-non-emph-style           = {plus_non_emph_style}
     plus-emph-style               = {plus_emph_style}
     plus-empty-line-marker-style  = {plus_empty_line_marker_style}
-    whitespace-error-style        = {whitespace_error_style}",
+    whitespace-error-style        = {whitespace_error_style}
+    blame-palette                 = {blame_palette}",
+        blame_palette = config
+            .blame_palette
+            .iter()
+            .map(|s| style::paint_color_string(s, config.true_color, config.git_config.as_ref()))
+            .join(" "),
         commit_style = config.commit_style.to_painted_string(),
         file_style = config.file_style.to_painted_string(),
         hunk_header_style = config.hunk_header_style.to_painted_string(),
@@ -45,12 +54,14 @@ pub fn show_config(config: &config::Config, writer: &mut dyn Write) -> std::io::
     file-added-label              = {file_added_label}
     file-modified-label           = {file_modified_label}
     file-removed-label            = {file_removed_label}
-    file-renamed-label            = {file_renamed_label}",
+    file-renamed-label            = {file_renamed_label}
+    right-arrow                   = {right_arrow}",
         true_color = config.true_color,
         file_added_label = format_option_value(&config.file_added_label),
         file_modified_label = format_option_value(&config.file_modified_label),
         file_removed_label = format_option_value(&config.file_removed_label),
         file_renamed_label = format_option_value(&config.file_renamed_label),
+        right_arrow = format_option_value(&config.right_arrow),
     )?;
     writeln!(
         writer,
@@ -106,7 +117,7 @@ pub fn show_config(config: &config::Config, writer: &mut dyn Write) -> std::io::
     max-line-length               = {max_line_length}
     line-fill-method              = {line_fill_method}
     navigate                      = {navigate}
-    navigate-regexp               = {navigate_regexp}
+    navigate-regex                = {navigate_regex}
     pager                         = {pager}
     paging                        = {paging_mode}
     side-by-side                  = {side_by_side}
@@ -121,9 +132,9 @@ pub fn show_config(config: &config::Config, writer: &mut dyn Write) -> std::io::
             BgFillMethod::Spaces => "spaces",
         },
         navigate = config.navigate,
-        navigate_regexp = match &config.navigate_regexp {
+        navigate_regex = match &config.navigate_regex {
             None => "".to_string(),
-            Some(s) => s.to_string(),
+            Some(s) => format_option_value(s.to_string()),
         },
         pager = config.pager.clone().unwrap_or_else(|| "none".to_string()),
         paging_mode = match config.paging_mode {

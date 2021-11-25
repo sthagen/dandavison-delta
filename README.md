@@ -18,14 +18,11 @@
 [Install](#installation) delta and add this to your `~/.gitconfig`:
 
 ```gitconfig
-[pager]
-    diff = delta
-    log = delta
-    reflog = delta
-    show = delta
+[core]
+    pager = delta
 
 [interactive]
-    diffFilter = delta --color-only --features=interactive
+    diffFilter = delta --color-only
 ```
 
 ## A syntax-highlighting pager for git and diff output
@@ -58,17 +55,20 @@ Code evolves, and we all spend time studying diffs. Delta aims to make this both
 - [Installation](#installation)
 - [Configuration](#configuration)
   - [Git config file](#git-config-file)
-  - [Environment](#environment)
+- [How delta works](#how-delta-works)
 - [Usage](#usage)
   - [Choosing colors (styles)](#choosing-colors-styles)
   - [Line numbers](#line-numbers)
   - [Side-by-side view](#side-by-side-view)
+  - [Grep](#grep)
   - ["Features": named groups of settings](#features-named-groups-of-settings)
   - [Custom themes](#custom-themes)
   - [diff-highlight and diff-so-fancy emulation](#diff-highlight-and-diff-so-fancy-emulation)
   - [--color-moved support](#--color-moved-support)
   - [Navigation keybindings for large diffs](#navigation-keybindings-for-large-diffs)
+  - [Git blame](#git-blame)
   - [24 bit color (truecolor)](#24-bit-color-truecolor)
+  - [Using Delta with GNU Screen](#using-delta-with-gnu-screen)
   - [Using Delta on Windows](#using-delta-on-windows)
   - [Mouse scrolling](#mouse-scrolling)
   - [Using Delta with Magit](#using-delta-with-magit)
@@ -146,11 +146,13 @@ Here's what `git show` can look like with git configured to use delta:
 - Language syntax highlighting with color themes
 - Within-line highlights based on a Levenshtein edit inference algorithm
 - Git style strings (foreground color, background color, font attributes) are supported for >20 stylable elements
-- Side-by-side view
+- Side-by-side view with line-wrapping
 - Line numbering
+- Handles grep output with file paths from `rg`, `git grep`, `grep`, etc
 - `diff-highlight` and `diff-so-fancy` emulation modes
 - Stylable box/line decorations to draw attention to commit, file and hunk header sections.
 - Support for Git's `--color-moved` feature.
+- Customizable `git blame` with syntax highlighting (`--hyperlinks` formats commits as links to GitHub/GitLab/Bitbucket etc)
 - Code can be copied directly from the diff (`-/+` markers are removed by default).
 - `n` and `N` keybindings to move between files in large diffs, and between diffs in `log -p` views (`--navigate`)
 - Commit hashes can be formatted as terminal [hyperlinks](https://gist.github.com/egmontkob/eb114294efbcd5adb1944c9f3cb5feda) to the GitHub/GitLab/Bitbucket page (`--hyperlinks`).
@@ -322,9 +324,16 @@ Delta also handles unified diff format, e.g. `diff -u a.txt b.txt | delta`.
 
 For Mercurial, you can add delta, with its command line options, to the `[pager]` section of `.hgrc`.
 
-#### Environment
+## How delta works
 
-Delta acts as a pager for git's output, and delta in turn passes its own output on to a "real" pager.
+If you configure delta in gitconfig as above, then git will automatically send its output to delta.
+Delta in turn passes its own output on to a "real" pager.
+Note that git will only send its output to delta if git believes that its output is going to a terminal (a "tty") for a human to read.
+In other words, if you do something like `git diff | grep ...` then you don't have to worry about delta changing the output from git, because delta will never be invoked at all.
+If you need to force delta to be invoked when git itself would not invoke it, then you can always pipe to delta explicitly.
+For example, `git diff | delta | something-that-expects-delta-output-with-colors` (in this example, git's output is being sent to a pipe, so git itself will not invoke delta).
+In general however, delta's output is intended for humans, not machines.
+
 The pager that delta uses is determined by consulting the following environment variables (in this order):
 
 - `DELTA_PAGER`
@@ -398,6 +407,15 @@ In contrast, the long replacement line in the right panel overflows by almost an
 
 For control over the details of line wrapping, see `--wrap-max-lines`, `--wrap-left-symbol`, `--wrap-right-symbol`, `--wrap-right-percent`, `--wrap-right-prefix-symbol`, `--inline-hint-style`.
 Line wrapping was implemented by @th1000s.
+
+### Grep
+
+Delta applies syntax-highlighting and other enhancements to standard grep output such as from `git grep`, [ripgrep](https://github.com/BurntSushi/ripgrep/) (aka `rg`), grep, etc.
+To use with `git grep`, set delta as the pager for `grep` in the `[pager]` section of your gitconfig. See the example at the [top of the page](#get-started).
+Output from other grep tools can be piped to delta: e.g. `rg -Hn --color=always`, `grep -Hn --color=always`, etc.
+To customize the colors and syntax highlighting, see `grep-match-line-style`, `grep-match-word-style`, `grep-contexct-line-style`, `grep-file-style`, `grep-line-number-style`.
+Ripgrep's `rg --json` output format is supported; this avoids certain file name parsing ambiguities that are inevitable with the standard grep output formats.
+Note that `git grep` can display the "function context" for matches and that delta handles this output specially: see the `-p` and `-W` options of `git grep`.
 
 ### "Features": named groups of settings
 
@@ -474,30 +492,94 @@ To activate the Git feature, use
 
 and see the [Git documentation](https://git-scm.com/docs/git-diff#Documentation/git-diff.txt---color-movedltmodegt) for the other possible values and associated color configuration.
 
-In order to support this feature, Delta has to look at the raw colors it receives in a line from Git, and use them to judge whether it is a typical removed/added line, or a specially-colored moved line. This should just work. However, if it causes problems, the behavior can be disabled using
+The `map-styles` option allows us to transform the styles that git emits for color-moved sections into delta styles.
+Here's an example of using `map-styles` to assign delta styles to the raw color-moved styles output by git.
+This feature allows all of git's color-moved options to be rendered using delta styles, including with syntax highlighting.
 
 ```gitconfig
 [delta]
-    inspect-raw-lines = false
+    map-styles = bold purple => syntax magenta, bold cyan => syntax blue
 ```
+
+It is also possible to reference other styles.
+
+```gitconfig
+[delta]
+    features = my-color-moved-theme
+
+[delta "my-color-moved-theme"]
+    git-moved-from-style = bold purple     # An ad-hoc named style (must end in "-style")
+
+    map-styles = "my-color-moved-theme.git-moved-from-style => red #cccccc, \
+                  bold cyan => syntax #cccccc"
+
+    # we could also have defined git-moved-to-style = bold cyan
+```
+
+To make use of that, you need to know that git is emitting "bold cyan" and "bold purple".
+But that's not always obvious.
+To help with that, delta now has a `--parse-ansi` mode. E.g. `git show --color=always | delta --parse-ansi` outputs something like this:
+
+<table><tr><td><img width=300px src="https://user-images.githubusercontent.com/52205/143238872-58a40754-ae50-4a9e-ba72-07e330e520e6.png" alt="image" /></td></tr></table>
+
+As you see above, we can now define named styles in gitconfig and refer to them in places where a style string is expected.
+We can also define custom named colors in git config, and styles can reference other styles; see the [hoopoe theme](https://github.com/dandavison/delta/blob/master/themes.gitconfig#L76-L91) for an example:
+
+```gitconfig
+[delta "hoopoe"]
+    green = "#d0ffd0"  # ad-hoc named color
+    plus-style = syntax hoopoe.green  # refer to named color
+    plus-non-emph-style = plus-style  # styles can reference other styles
+```
+
+Additionally, we can now use the 140 color names that are standard in CSS. Use `delta --show-colors` to get a demo of the available colors, as background colors to see how they look with syntax highlighting:
+
+<table><tr><td><img width=300px src="https://user-images.githubusercontent.com/52205/143237384-246db199-ef65-4ad2-ad4e-03d07d1ea41d.png" alt="image" /></td></tr></table>
 
 ### Navigation keybindings for large diffs
 
 Use the `navigate` feature to activate navigation keybindings. In this mode, pressing `n` will jump forward to the next file in the diff, and `N` will jump backwards. If you are viewing multiple commits (e.g. via `git log -p`) then navigation will also visit commit boundaries.
 
+### Git blame
+
+Set delta as the pager for `blame` in the `[pager]` section of your gitconfig: see the [example gitconfig](#get-started).
+If `hyperlinks` is enabled then each blame commit will link to the commit on GitHub/GitLab/Bitbucket/etc.
+
+<table><tr><td><img width=600px src="https://user-images.githubusercontent.com/52205/141891376-1fdb87dc-1d9c-4ad6-9d72-eeb19a8aeb0b.png" alt="image" /></td></tr></table>
+
 ### 24 bit color (truecolor)
 
-Delta looks best if your terminal application supports 24 bit colors. See https://gist.github.com/XVilka/8346728. For example, on MacOS, iTerm2 supports 24-bit colors but Terminal.app does not.
+Delta looks best if your terminal application supports 24 bit colors. See https://github.com/termstandard/colors#readme. For example, on MacOS, iTerm2 supports 24-bit colors but Terminal.app does not.
 
 If your terminal application does not support 24-bit color, delta will still work, by automatically choosing the closest color from those available. See the `Colors` section of the help output below.
 
 If you're using tmux, it's worth checking that 24 bit color is working correctly. For example, run a color test script like [this one](https://gist.githubusercontent.com/lifepillar/09a44b8cf0f9397465614e622979107f/raw/24-bit-color.sh), or one of the others listed [here](https://gist.github.com/XVilka/8346728). If you do not see smooth color gradients, see the discussion at [tmux#696](https://github.com/tmux/tmux/issues/696). The short version is you need something like this in your `~/.tmux.conf`:
 
-```
+```Shell
 set -ga terminal-overrides ",xterm-256color:Tc"
 ```
 
 and you may then need to quit tmux completely for it to take effect.
+
+True color output in GNU Screen is currently only possible when using a development build, as support for it is not yet implemented in the (v4) release versions. A snapshot of the latest Git trunk can be obtained via https://git.savannah.gnu.org/cgit/screen.git/snapshot/screen-master.tar.gz - the required build steps are described in the `src/INSTALL` file. After installing the program, 24-bit color support can be activated by including `truecolor on` in either the system's or the user's `screenrc` file.
+
+### Using Delta with GNU Screen
+
+When working in Screen without true color output, it might be that colors supposed to be different look the same in XTerm compatible terminals. If that is the case, make sure the following settings are included in your `screenrc` file:
+
+```Shell
+term screen-256color
+termcapinfo xterm 'Co#256:AB=\E[48;5;%dm:AF=\E[38;5;%dm'  # ANSI (256-color) patterns - AB: background, AF: foreground
+attrcolor b ".I"                                          # use bright colors for bold text
+```
+
+If despite having those settings you still only get a limited set of colors, your build of Screen might have been configured without the `--enable-colors256` flag. If this is the case, you have two options :
+
+- If available for your OS, get a different package of Screen. Otherwise
+- Build your own binary :
+  - Download and extract a release tarball from https://ftp.gnu.org/gnu/screen/
+  - `cd` into the newly extracted folder
+  - Follow the instructions in the `INSTALL` file, and when running the `./configure` command apply the `--enable-colors256` flag.
 
 ### Using Delta on Windows
 
@@ -587,8 +669,8 @@ The languages and color themes that ship with delta are those that ship with bat
 
 You'll need to [install the rust tools](https://www.rust-lang.org/learn/get-started). Then:
 
-```
-cargo build --release
+```ShellSession
+$ cargo build --release
 ```
 
 and use the executable found at `./target/release/delta`.
@@ -810,6 +892,9 @@ OPTIONS:
         --wrap-right-prefix-symbol <wrap-right-prefix-symbol>
             Symbol displayed in front of right-aligned wrapped content [default: …]
 
+        --navigate-regex <navigate-regex>
+            A regexp to use in the less pager when navigating (auto-generated when unspecified)
+
         --file-modified-label <file-modified-label>
             Text to display in front of a modified file path [default: ]
 
@@ -824,6 +909,9 @@ OPTIONS:
 
         --file-renamed-label <file-renamed-label>
             Text to display in front of a renamed file path [default: renamed:]
+
+        --right-arrow <right-arrow>
+            Text to display with a changed value such as a diff heading, a rename, or a chmod [default: ⟶  ]
 
         --hunk-label <hunk-label>
             Text to display in front of a hunk header [default: ]

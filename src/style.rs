@@ -1,12 +1,14 @@
 use std::borrow::Cow;
 use std::fmt;
+use std::hash::{Hash, Hasher};
 
 use lazy_static::lazy_static;
 
 use crate::ansi;
 use crate::color;
+use crate::git_config::GitConfig;
 
-#[derive(Clone, Copy, Debug, PartialEq, Default)]
+#[derive(Clone, Copy, PartialEq, Default)]
 pub struct Style {
     pub ansi_term_style: ansi_term::Style,
     pub is_emph: bool,
@@ -14,6 +16,42 @@ pub struct Style {
     pub is_raw: bool,
     pub is_syntax_highlighted: bool,
     pub decoration_style: DecorationStyle,
+}
+
+// More compact debug output, replace false/empty with lowercase and true with uppercase.
+impl fmt::Debug for Style {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let ansi = if self.ansi_term_style.is_plain() {
+            "<a".into()
+        } else {
+            format!("ansi_term_style: {:?}, <", self.ansi_term_style)
+        };
+
+        let deco = if self.decoration_style == DecorationStyle::NoDecoration {
+            "d>".into()
+        } else {
+            format!(">, decoration_style: {:?}", self.decoration_style)
+        };
+
+        let is_set = |c: char, set: bool| -> String {
+            if set {
+                c.to_uppercase().to_string()
+            } else {
+                c.to_lowercase().to_string()
+            }
+        };
+
+        write!(
+            f,
+            "Style {{ {}{}{}{}{}{} }}",
+            ansi,
+            is_set('e', self.is_emph),
+            is_set('o', self.is_omitted),
+            is_set('r', self.is_raw),
+            is_set('s', self.is_syntax_highlighted),
+            deco
+        )
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -91,6 +129,23 @@ impl Style {
     }
 }
 
+/// Interpret `color_string` as a color specifier and return it painted accordingly.
+pub fn paint_color_string<'a>(
+    color_string: &'a str,
+    true_color: bool,
+    git_config: Option<&GitConfig>,
+) -> ansi_term::ANSIGenericString<'a, str> {
+    if let Some(color) = color::parse_color(color_string, true_color, git_config) {
+        let style = ansi_term::Style {
+            background: Some(color),
+            ..ansi_term::Style::default()
+        };
+        style.paint(color_string)
+    } else {
+        ansi_term::ANSIGenericString::from(color_string)
+    }
+}
+
 impl fmt::Display for Style {
     fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
         if self.is_raw {
@@ -156,6 +211,89 @@ pub fn ansi_term_style_equality(a: ansi_term::Style, b: ansi_term::Style) -> boo
     }
 }
 
+// TODO: The equality methods were implemented first, and the equality_key
+// methods later. The former should be re-implemented in terms of the latter.
+// But why did the former not address equality of ansi_term::Color::RGB values?
+pub struct AnsiTermStyleEqualityKey {
+    attrs_key: (bool, bool, bool, bool, bool, bool, bool, bool),
+    foreground_key: Option<(u8, u8, u8, u8)>,
+    background_key: Option<(u8, u8, u8, u8)>,
+}
+
+impl PartialEq for AnsiTermStyleEqualityKey {
+    fn eq(&self, other: &Self) -> bool {
+        let option_eq = |opt_a, opt_b| match (opt_a, opt_b) {
+            (Some(a), Some(b)) => a == b,
+            (None, None) => true,
+            _ => false,
+        };
+
+        if self.attrs_key != other.attrs_key {
+            false
+        } else {
+            option_eq(self.foreground_key, other.foreground_key)
+                && option_eq(self.background_key, other.background_key)
+        }
+    }
+}
+
+impl Eq for AnsiTermStyleEqualityKey {}
+
+impl Hash for AnsiTermStyleEqualityKey {
+    fn hash<H: Hasher>(&self, state: &mut H) {
+        self.attrs_key.hash(state);
+        self.foreground_key.hash(state);
+        self.background_key.hash(state);
+    }
+}
+
+pub fn ansi_term_style_equality_key(style: ansi_term::Style) -> AnsiTermStyleEqualityKey {
+    let attrs_key = (
+        style.is_bold,
+        style.is_dimmed,
+        style.is_italic,
+        style.is_underline,
+        style.is_blink,
+        style.is_reverse,
+        style.is_hidden,
+        style.is_strikethrough,
+    );
+    AnsiTermStyleEqualityKey {
+        attrs_key,
+        foreground_key: style.foreground.map(ansi_term_color_equality_key),
+        background_key: style.background.map(ansi_term_color_equality_key),
+    }
+}
+
+impl fmt::Debug for AnsiTermStyleEqualityKey {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        let is_set = |c: char, set: bool| -> String {
+            if set {
+                c.to_uppercase().to_string()
+            } else {
+                c.to_lowercase().to_string()
+            }
+        };
+
+        let (bold, dimmed, italic, underline, blink, reverse, hidden, strikethrough) =
+            self.attrs_key;
+        write!(
+            f,
+            "ansi_term::Style {{ {:?} {:?} {}{}{}{}{}{}{}{} }}",
+            self.foreground_key,
+            self.background_key,
+            is_set('b', bold),
+            is_set('d', dimmed),
+            is_set('i', italic),
+            is_set('u', underline),
+            is_set('l', blink),
+            is_set('r', reverse),
+            is_set('h', hidden),
+            is_set('s', strikethrough),
+        )
+    }
+}
+
 fn ansi_term_color_equality(a: Option<ansi_term::Color>, b: Option<ansi_term::Color>) -> bool {
     match (a, b) {
         (None, None) => true,
@@ -183,6 +321,26 @@ fn ansi_term_16_color_equality(a: ansi_term::Color, b: ansi_term::Color) -> bool
             | (ansi_term::Color::Fixed(6), ansi_term::Color::Cyan)
             | (ansi_term::Color::Fixed(7), ansi_term::Color::White)
     )
+}
+
+fn ansi_term_color_equality_key(color: ansi_term::Color) -> (u8, u8, u8, u8) {
+    // Same (r, g, b, a) encoding as in utils::bat::terminal::to_ansi_color.
+    // When a = 0xFF, then a 256-color number is stored in the red channel, and
+    // the green and blue channels are meaningless. But a=0 signifies an RGB
+    // color.
+    let default = 0xFF;
+    match color {
+        ansi_term::Color::Fixed(0) | ansi_term::Color::Black => (0, default, default, default),
+        ansi_term::Color::Fixed(1) | ansi_term::Color::Red => (1, default, default, default),
+        ansi_term::Color::Fixed(2) | ansi_term::Color::Green => (2, default, default, default),
+        ansi_term::Color::Fixed(3) | ansi_term::Color::Yellow => (3, default, default, default),
+        ansi_term::Color::Fixed(4) | ansi_term::Color::Blue => (4, default, default, default),
+        ansi_term::Color::Fixed(5) | ansi_term::Color::Purple => (5, default, default, default),
+        ansi_term::Color::Fixed(6) | ansi_term::Color::Cyan => (6, default, default, default),
+        ansi_term::Color::Fixed(7) | ansi_term::Color::White => (7, default, default, default),
+        ansi_term::Color::Fixed(n) => (n, default, default, default),
+        ansi_term::Color::RGB(r, g, b) => (r, g, b, 0),
+    }
 }
 
 lazy_static! {
@@ -317,5 +475,29 @@ pub mod tests {
             plus_line_from_unconfigured_git,
             [].iter()
         ));
+    }
+
+    #[test]
+    fn test_style_compact_debug_fmt() {
+        let mut s = Style::new();
+        assert_eq!(format!("{:?}", s), "Style { <aeorsd> }");
+        s.is_emph = true;
+        assert_eq!(format!("{:?}", s), "Style { <aEorsd> }");
+        s.ansi_term_style = ansi_term::Style::new().bold();
+        assert_eq!(
+            format!("{:?}", s),
+            "Style { ansi_term_style: Style { bold }, <Eorsd> }"
+        );
+        s.decoration_style = DecorationStyle::Underline(s.ansi_term_style.clone());
+        assert_eq!(
+            format!("{:?}", s),
+            "Style { ansi_term_style: Style { bold }, <Eors>, \
+                  decoration_style: Underline(Style { bold }) }"
+        );
+        s.ansi_term_style = ansi_term::Style::default();
+        assert_eq!(
+            format!("{:?}", s),
+            "Style { <aEors>, decoration_style: Underline(Style { bold }) }"
+        );
     }
 }

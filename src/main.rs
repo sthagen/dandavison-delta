@@ -5,10 +5,9 @@ extern crate error_chain;
 
 mod align;
 mod ansi;
-#[cfg(not(tarpaulin_include))]
-mod bat_utils;
 mod cli;
 mod color;
+mod colors;
 mod config;
 mod delta;
 mod edits;
@@ -21,11 +20,12 @@ mod minusplus;
 mod options;
 mod paint;
 mod parse_style;
+mod parse_styles;
 mod style;
+mod utils;
 mod wrapping;
 
 mod subcommands;
-mod syntect_utils;
 
 mod tests;
 
@@ -34,9 +34,9 @@ use std::process;
 
 use bytelines::ByteLinesReader;
 
-use crate::bat_utils::assets::{list_languages, HighlightingAssets};
-use crate::bat_utils::output::OutputType;
 use crate::delta::delta;
+use crate::utils::bat::assets::{list_languages, HighlightingAssets};
+use crate::utils::bat::output::OutputType;
 
 pub fn fatal<T>(errmsg: T) -> !
 where
@@ -82,19 +82,34 @@ fn run_app() -> std::io::Result<i32> {
     let assets = HighlightingAssets::new();
     let opt = cli::Opt::from_args_and_git_config(git_config::GitConfig::try_create(), assets);
 
-    if opt.list_languages {
-        list_languages()?;
-        return Ok(0);
+    let subcommand_result = if opt.list_languages {
+        Some(list_languages())
     } else if opt.list_syntax_themes {
-        subcommands::list_syntax_themes::list_syntax_themes()?;
-        return Ok(0);
+        Some(subcommands::list_syntax_themes::list_syntax_themes())
     } else if opt.show_syntax_themes {
-        subcommands::show_syntax_themes::show_syntax_themes()?;
-        return Ok(0);
+        Some(subcommands::show_syntax_themes::show_syntax_themes())
     } else if opt.show_themes {
-        subcommands::show_themes::show_themes(opt.dark, opt.light, opt.computed.is_light_mode)?;
+        Some(subcommands::show_themes::show_themes(
+            opt.dark,
+            opt.light,
+            opt.computed.is_light_mode,
+        ))
+    } else if opt.show_colors {
+        Some(subcommands::show_colors::show_colors())
+    } else if opt.parse_ansi {
+        Some(subcommands::parse_ansi::parse_ansi())
+    } else {
+        None
+    };
+    if let Some(result) = subcommand_result {
+        if let Err(error) = result {
+            match error.kind() {
+                ErrorKind::BrokenPipe => {}
+                _ => fatal(format!("{}", error)),
+            }
+        }
         return Ok(0);
-    }
+    };
 
     let _show_config = opt.show_config;
     let config = config::Config::from(opt);

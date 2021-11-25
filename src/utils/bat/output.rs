@@ -1,6 +1,6 @@
 // https://github.com/sharkdp/bat a1b9334a44a2c652f52dddaa83dbacba57372468
 // src/output.rs
-// See src/bat_utils/LICENSE
+// See src/utils/bat/LICENSE
 use std::env;
 use std::ffi::OsString;
 use std::io::{self, Write};
@@ -162,8 +162,7 @@ fn _make_process_from_less_path(
         p.env("LESSCHARSET", "UTF-8");
         p.env("LESSANSIENDCHARS", "mK");
         if config.navigate {
-            if let Ok(hist_file) = navigate::copy_less_hist_file_and_append_navigate_regexp(config)
-            {
+            if let Ok(hist_file) = navigate::copy_less_hist_file_and_append_navigate_regex(config) {
                 p.env("LESSHISTFILE", hist_file);
                 if config.show_themes {
                     p.arg("+n");

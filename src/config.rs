@@ -9,7 +9,6 @@ use syntect::parsing::SyntaxSet;
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::ansi;
-use crate::bat_utils::output::PagingMode;
 use crate::cli;
 use crate::color;
 use crate::delta::State;
@@ -20,9 +19,12 @@ use crate::features::side_by_side::{self, ansifill, LeftRight};
 use crate::git_config::{GitConfig, GitConfigEntry};
 use crate::minusplus::MinusPlus;
 use crate::paint::BgFillMethod;
-use crate::style::{self, Style};
-use crate::syntect_utils::FromDeltaStyle;
+use crate::parse_styles;
+use crate::style;
+use crate::style::Style;
 use crate::tests::TESTING;
+use crate::utils::bat::output::PagingMode;
+use crate::utils::syntect::FromDeltaStyle;
 use crate::wrapping::WrapConfig;
 
 pub const INLINE_SYMBOL_WIDTH_1: usize = 1;
@@ -57,9 +59,12 @@ fn adapt_wrap_max_lines_argument(arg: String) -> usize {
 pub struct Config {
     pub available_terminal_width: usize,
     pub background_color_extends_to_terminal_width: bool,
-    pub commit_style: Style,
+    pub blame_format: String,
+    pub blame_palette: Vec<String>,
+    pub blame_timestamp_format: String,
     pub color_only: bool,
     pub commit_regex: Regex,
+    pub commit_style: Style,
     pub cwd_relative_to_repo_root: Option<String>,
     pub decorations_width: cli::Width,
     pub default_language: Option<String>,
@@ -70,38 +75,48 @@ pub struct Config {
     pub file_modified_label: String,
     pub file_removed_label: String,
     pub file_renamed_label: String,
-    pub hunk_label: String,
+    pub right_arrow: String,
     pub file_style: Style,
-    pub git_config: Option<GitConfig>,
     pub git_config_entries: HashMap<String, GitConfigEntry>,
+    pub git_config: Option<GitConfig>,
+    pub git_minus_style: Style,
+    pub git_plus_style: Style,
+    pub grep_context_line_style: Style,
+    pub grep_file_style: Style,
+    pub grep_line_number_style: Style,
+    pub grep_match_line_style: Style,
+    pub grep_match_word_style: Style,
+    pub grep_separator_symbol: String,
     pub hunk_header_file_style: Style,
     pub hunk_header_line_number_style: Style,
-    pub hunk_header_style: Style,
     pub hunk_header_style_include_file_path: bool,
     pub hunk_header_style_include_line_number: bool,
-    pub hyperlinks: bool,
+    pub hunk_header_style: Style,
+    pub hunk_label: String,
     pub hyperlinks_commit_link_format: Option<String>,
     pub hyperlinks_file_link_format: String,
+    pub hyperlinks: bool,
     pub inline_hint_style: Style,
     pub inspect_raw_lines: cli::InspectRawLines,
     pub keep_plus_minus_markers: bool,
+    pub line_buffer_size: usize,
     pub line_fill_method: BgFillMethod,
-    pub line_numbers: bool,
     pub line_numbers_format: LeftRight<String>,
     pub line_numbers_style_leftright: LeftRight<Style>,
     pub line_numbers_style_minusplus: MinusPlus<Style>,
     pub line_numbers_zero_style: Style,
-    pub line_buffer_size: usize,
-    pub max_line_distance: f64,
+    pub line_numbers: bool,
+    pub styles_map: Option<HashMap<style::AnsiTermStyleEqualityKey, Style>>,
     pub max_line_distance_for_naively_paired_lines: f64,
+    pub max_line_distance: f64,
     pub max_line_length: usize,
     pub minus_emph_style: Style,
     pub minus_empty_line_marker_style: Style,
     pub minus_file: Option<PathBuf>,
     pub minus_non_emph_style: Style,
     pub minus_style: Style,
+    pub navigate_regex: Option<String>,
     pub navigate: bool,
-    pub navigate_regexp: Option<String>,
     pub null_style: Style,
     pub null_syntect_style: SyntectStyle,
     pub pager: Option<String>,
@@ -111,12 +126,10 @@ pub struct Config {
     pub plus_file: Option<PathBuf>,
     pub plus_non_emph_style: Style,
     pub plus_style: Style,
-    pub git_minus_style: Style,
-    pub git_plus_style: Style,
     pub relative_paths: bool,
     pub show_themes: bool,
-    pub side_by_side: bool,
     pub side_by_side_data: side_by_side::SideBySideData,
+    pub side_by_side: bool,
     pub syntax_dummy_theme: SyntaxTheme,
     pub syntax_set: SyntaxSet,
     pub syntax_theme: Option<SyntaxTheme>,
@@ -145,34 +158,8 @@ impl Config {
 
 impl From<cli::Opt> for Config {
     fn from(opt: cli::Opt) -> Self {
-        let (
-            minus_style,
-            minus_emph_style,
-            minus_non_emph_style,
-            minus_empty_line_marker_style,
-            zero_style,
-            plus_style,
-            plus_emph_style,
-            plus_non_emph_style,
-            plus_empty_line_marker_style,
-            whitespace_error_style,
-        ) = make_hunk_styles(&opt);
-
-        let (
-            commit_style,
-            file_style,
-            hunk_header_style,
-            hunk_header_file_style,
-            hunk_header_line_number_style,
-        ) = make_commit_file_hunk_header_styles(&opt);
-
-        let (
-            line_numbers_minus_style,
-            line_numbers_zero_style,
-            line_numbers_plus_style,
-            line_numbers_left_style,
-            line_numbers_right_style,
-        ) = make_line_number_styles(&opt);
+        let styles = parse_styles::parse_styles(&opt);
+        let styles_map = parse_styles::parse_styles_map(&opt);
 
         let max_line_distance_for_naively_paired_lines =
             env::get_env_var("DELTA_EXPERIMENTAL_MAX_LINE_DISTANCE_FOR_NAIVELY_PAIRED_LINES")
@@ -197,27 +184,14 @@ impl From<cli::Opt> for Config {
             ));
         });
 
-        let inline_hint_style = Style::from_str(
-            &opt.inline_hint_style,
-            None,
-            None,
-            opt.computed.true_color,
-            false,
-        );
-        let git_minus_style = match opt.git_config_entries.get("color.diff.old") {
-            Some(GitConfigEntry::Style(s)) => Style::from_git_str(s),
-            _ => *style::GIT_DEFAULT_MINUS_STYLE,
-        };
-        let git_plus_style = match opt.git_config_entries.get("color.diff.new") {
-            Some(GitConfigEntry::Style(s)) => Style::from_git_str(s),
-            _ => *style::GIT_DEFAULT_PLUS_STYLE,
-        };
+        let blame_palette = make_blame_palette(opt.blame_palette, opt.computed.is_light_mode);
 
         let file_added_label = opt.file_added_label;
         let file_copied_label = opt.file_copied_label;
         let file_modified_label = opt.file_modified_label;
         let file_removed_label = opt.file_removed_label;
         let file_renamed_label = opt.file_renamed_label;
+        let right_arrow = opt.right_arrow;
         let hunk_label = opt.hunk_label;
 
         let line_fill_method = match opt.line_fill_method.as_deref() {
@@ -237,8 +211,10 @@ impl From<cli::Opt> for Config {
             side_by_side_data,
         );
 
-        let navigate_regexp = if opt.navigate || opt.show_themes {
-            Some(navigate::make_navigate_regexp(
+        let navigate_regex = if (opt.navigate || opt.show_themes)
+            && (opt.navigate_regex.is_none() || opt.navigate_regex == Some("".to_string()))
+        {
+            Some(navigate::make_navigate_regex(
                 opt.show_themes,
                 &file_modified_label,
                 &file_added_label,
@@ -247,7 +223,7 @@ impl From<cli::Opt> for Config {
                 &hunk_label,
             ))
         } else {
-            None
+            opt.navigate_regex
         };
 
         let wrap_max_lines_plus1 = adapt_wrap_max_lines_argument(opt.wrap_max_lines);
@@ -257,7 +233,10 @@ impl From<cli::Opt> for Config {
             background_color_extends_to_terminal_width: opt
                 .computed
                 .background_color_extends_to_terminal_width,
-            commit_style,
+            blame_format: opt.blame_format,
+            blame_palette,
+            blame_timestamp_format: opt.blame_timestamp_format,
+            commit_style: styles["commit-style"],
             color_only: opt.color_only,
             commit_regex,
             cwd_relative_to_repo_root: std::env::var("GIT_PREFIX").ok(),
@@ -270,13 +249,20 @@ impl From<cli::Opt> for Config {
             file_modified_label,
             file_removed_label,
             file_renamed_label,
+            right_arrow,
             hunk_label,
-            file_style,
+            file_style: styles["file-style"],
             git_config: opt.git_config,
             git_config_entries: opt.git_config_entries,
-            hunk_header_file_style,
-            hunk_header_line_number_style,
-            hunk_header_style,
+            grep_context_line_style: styles["grep-context-line-style"],
+            grep_file_style: styles["grep-file-style"],
+            grep_line_number_style: styles["grep-line-number-style"],
+            grep_match_line_style: styles["grep-match-line-style"],
+            grep_match_word_style: styles["grep-match-word-style"],
+            grep_separator_symbol: opt.grep_separator_symbol,
+            hunk_header_file_style: styles["hunk-header-file-style"],
+            hunk_header_line_number_style: styles["hunk-header-line-number-style"],
+            hunk_header_style: styles["hunk-header-style"],
             hunk_header_style_include_file_path: opt
                 .hunk_header_style
                 .split(' ')
@@ -289,7 +275,7 @@ impl From<cli::Opt> for Config {
             hyperlinks_commit_link_format: opt.hyperlinks_commit_link_format,
             hyperlinks_file_link_format: opt.hyperlinks_file_link_format,
             inspect_raw_lines: opt.computed.inspect_raw_lines,
-            inline_hint_style,
+            inline_hint_style: styles["inline-hint-style"],
             keep_plus_minus_markers: opt.keep_plus_minus_markers,
             line_fill_method: if !opt.computed.stdout_is_term && !TESTING {
                 // Don't write ANSI sequences (which rely on the width of the
@@ -305,15 +291,16 @@ impl From<cli::Opt> for Config {
                 opt.line_numbers_right_format,
             ),
             line_numbers_style_leftright: LeftRight::new(
-                line_numbers_left_style,
-                line_numbers_right_style,
+                styles["line-numbers-left-style"],
+                styles["line-numbers-right-style"],
             ),
             line_numbers_style_minusplus: MinusPlus::new(
-                line_numbers_minus_style,
-                line_numbers_plus_style,
+                styles["line-numbers-minus-style"],
+                styles["line-numbers-plus-style"],
             ),
-            line_numbers_zero_style,
+            line_numbers_zero_style: styles["line-numbers-zero-style"],
             line_buffer_size: opt.line_buffer_size,
+            styles_map,
             max_line_distance: opt.max_line_distance,
             max_line_distance_for_naively_paired_lines,
             max_line_length: match (opt.side_by_side, wrap_max_lines_plus1) {
@@ -333,24 +320,24 @@ impl From<cli::Opt> for Config {
                     )
                 }
             },
-            minus_emph_style,
-            minus_empty_line_marker_style,
+            minus_emph_style: styles["minus-emph-style"],
+            minus_empty_line_marker_style: styles["minus-empty-line-marker-style"],
             minus_file: opt.minus_file,
-            minus_non_emph_style,
-            minus_style,
+            minus_non_emph_style: styles["minus-non-emph-style"],
+            minus_style: styles["minus-style"],
             navigate: opt.navigate,
-            navigate_regexp,
+            navigate_regex,
             null_style: Style::new(),
             null_syntect_style: SyntectStyle::default(),
             pager: opt.pager,
             paging_mode: opt.computed.paging_mode,
-            plus_emph_style,
-            plus_empty_line_marker_style,
+            plus_emph_style: styles["plus-emph-style"],
+            plus_empty_line_marker_style: styles["plus-empty-line-marker-style"],
             plus_file: opt.plus_file,
-            plus_non_emph_style,
-            plus_style,
-            git_minus_style,
-            git_plus_style,
+            plus_non_emph_style: styles["plus-non-emph-style"],
+            plus_style: styles["plus-style"],
+            git_minus_style: styles["git-minus-style"],
+            git_plus_style: styles["git-plus-style"],
             relative_paths: opt.relative_paths,
             show_themes: opt.show_themes,
             side_by_side: opt.side_by_side,
@@ -386,221 +373,31 @@ impl From<cli::Opt> for Config {
                     }
                 },
                 max_lines: wrap_max_lines_plus1,
-                inline_hint_syntect_style: SyntectStyle::from_delta_style(inline_hint_style),
+                inline_hint_syntect_style: SyntectStyle::from_delta_style(
+                    styles["inline-hint-style"],
+                ),
             },
-            whitespace_error_style,
-            zero_style,
+            whitespace_error_style: styles["whitespace-error-style"],
+            zero_style: styles["zero-style"],
         }
     }
 }
 
-fn make_hunk_styles(
-    opt: &cli::Opt,
-) -> (
-    Style,
-    Style,
-    Style,
-    Style,
-    Style,
-    Style,
-    Style,
-    Style,
-    Style,
-    Style,
-) {
-    let is_light_mode = opt.computed.is_light_mode;
-    let true_color = opt.computed.true_color;
-    let minus_style = Style::from_str(
-        &opt.minus_style,
-        Some(Style::from_colors(
-            None,
-            Some(color::get_minus_background_color_default(
-                is_light_mode,
-                true_color,
-            )),
-        )),
-        None,
-        true_color,
-        false,
-    );
-
-    let minus_emph_style = Style::from_str(
-        &opt.minus_emph_style,
-        Some(Style::from_colors(
-            None,
-            Some(color::get_minus_emph_background_color_default(
-                is_light_mode,
-                true_color,
-            )),
-        )),
-        None,
-        true_color,
-        true,
-    );
-
-    let minus_non_emph_style = Style::from_str(
-        &opt.minus_non_emph_style,
-        Some(minus_style),
-        None,
-        true_color,
-        false,
-    );
-
-    // The style used to highlight a removed empty line when otherwise it would be invisible due to
-    // lack of background color in minus-style.
-    let minus_empty_line_marker_style = Style::from_str(
-        &opt.minus_empty_line_marker_style,
-        Some(Style::from_colors(
-            None,
-            Some(color::get_minus_background_color_default(
-                is_light_mode,
-                true_color,
-            )),
-        )),
-        None,
-        true_color,
-        false,
-    );
-
-    let zero_style = Style::from_str(&opt.zero_style, None, None, true_color, false);
-
-    let plus_style = Style::from_str(
-        &opt.plus_style,
-        Some(Style::from_colors(
-            None,
-            Some(color::get_plus_background_color_default(
-                is_light_mode,
-                true_color,
-            )),
-        )),
-        None,
-        true_color,
-        false,
-    );
-
-    let plus_emph_style = Style::from_str(
-        &opt.plus_emph_style,
-        Some(Style::from_colors(
-            None,
-            Some(color::get_plus_emph_background_color_default(
-                is_light_mode,
-                true_color,
-            )),
-        )),
-        None,
-        true_color,
-        true,
-    );
-
-    let plus_non_emph_style = Style::from_str(
-        &opt.plus_non_emph_style,
-        Some(plus_style),
-        None,
-        true_color,
-        false,
-    );
-
-    // The style used to highlight an added empty line when otherwise it would be invisible due to
-    // lack of background color in plus-style.
-    let plus_empty_line_marker_style = Style::from_str(
-        &opt.plus_empty_line_marker_style,
-        Some(Style::from_colors(
-            None,
-            Some(color::get_plus_background_color_default(
-                is_light_mode,
-                true_color,
-            )),
-        )),
-        None,
-        true_color,
-        false,
-    );
-
-    let whitespace_error_style =
-        Style::from_str(&opt.whitespace_error_style, None, None, true_color, false);
-
-    (
-        minus_style,
-        minus_emph_style,
-        minus_non_emph_style,
-        minus_empty_line_marker_style,
-        zero_style,
-        plus_style,
-        plus_emph_style,
-        plus_non_emph_style,
-        plus_empty_line_marker_style,
-        whitespace_error_style,
-    )
-}
-
-fn make_line_number_styles(opt: &cli::Opt) -> (Style, Style, Style, Style, Style) {
-    let true_color = opt.computed.true_color;
-    let line_numbers_left_style =
-        Style::from_str(&opt.line_numbers_left_style, None, None, true_color, false);
-
-    let line_numbers_minus_style =
-        Style::from_str(&opt.line_numbers_minus_style, None, None, true_color, false);
-
-    let line_numbers_zero_style =
-        Style::from_str(&opt.line_numbers_zero_style, None, None, true_color, false);
-
-    let line_numbers_plus_style =
-        Style::from_str(&opt.line_numbers_plus_style, None, None, true_color, false);
-
-    let line_numbers_right_style =
-        Style::from_str(&opt.line_numbers_right_style, None, None, true_color, false);
-
-    (
-        line_numbers_minus_style,
-        line_numbers_zero_style,
-        line_numbers_plus_style,
-        line_numbers_left_style,
-        line_numbers_right_style,
-    )
-}
-
-fn make_commit_file_hunk_header_styles(opt: &cli::Opt) -> (Style, Style, Style, Style, Style) {
-    let true_color = opt.computed.true_color;
-    (
-        Style::from_str_with_handling_of_special_decoration_attributes_and_respecting_deprecated_foreground_color_arg(
-            &opt.commit_style,
-            None,
-            Some(&opt.commit_decoration_style),
-            opt.deprecated_commit_color.as_deref(),
-            true_color,
-            false,
-        ),
-        Style::from_str_with_handling_of_special_decoration_attributes_and_respecting_deprecated_foreground_color_arg(
-            &opt.file_style,
-            None,
-            Some(&opt.file_decoration_style),
-            opt.deprecated_file_color.as_deref(),
-            true_color,
-            false,
-        ),
-        Style::from_str_with_handling_of_special_decoration_attributes_and_respecting_deprecated_foreground_color_arg(
-            &opt.hunk_header_style,
-            None,
-            Some(&opt.hunk_header_decoration_style),
-            opt.deprecated_hunk_color.as_deref(),
-            true_color,
-            false,
-        ),
-        Style::from_str_with_handling_of_special_decoration_attributes(
-            &opt.hunk_header_file_style,
-            None,
-            None,
-            true_color,
-            false,
-        ),
-        Style::from_str_with_handling_of_special_decoration_attributes(
-            &opt.hunk_header_line_number_style,
-            None,
-            None,
-            true_color,
-            false,
-        ),
-    )
+fn make_blame_palette(blame_palette: Option<String>, is_light_mode: bool) -> Vec<String> {
+    match (blame_palette, is_light_mode) {
+        (Some(string), _) => string
+            .split_whitespace()
+            .map(|s| s.to_owned())
+            .collect::<Vec<String>>(),
+        (None, true) => color::LIGHT_THEME_BLAME_PALETTE
+            .iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<String>>(),
+        (None, false) => color::DARK_THEME_BLAME_PALETTE
+            .iter()
+            .map(|s| s.to_string())
+            .collect::<Vec<String>>(),
+    }
 }
 
 /// Did the user supply `option` on the command line?
@@ -622,9 +419,9 @@ pub const HEADER_LEN: usize = 7;
 
 #[cfg(test)]
 pub mod tests {
-    use crate::bat_utils::output::PagingMode;
     use crate::cli;
     use crate::tests::integration_test_utils;
+    use crate::utils::bat::output::PagingMode;
     use std::fs::remove_file;
 
     #[test]

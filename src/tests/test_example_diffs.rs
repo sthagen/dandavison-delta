@@ -110,7 +110,8 @@ mod tests {
 
     #[test]
     fn test_diff_unified_two_files() {
-        let config = integration_test_utils::make_config_from_args(&[]);
+        let config =
+            integration_test_utils::make_config_from_args(&["--file-modified-label", "comparing:"]);
         let output = integration_test_utils::run_delta(DIFF_UNIFIED_TWO_FILES, &config);
         let output = strip_ansi_codes(&output);
         let mut lines = output.lines();
@@ -125,16 +126,14 @@ mod tests {
 
     #[test]
     fn test_diff_unified_two_directories() {
-        let config = integration_test_utils::make_config_from_args(&["--width", "80"]);
+        let config =
+            integration_test_utils::make_config_from_args(&["--width", "80", "--navigate"]);
         let output = integration_test_utils::run_delta(DIFF_UNIFIED_TWO_DIRECTORIES, &config);
         let output = strip_ansi_codes(&output);
         let mut lines = output.lines();
 
         // Header
-        assert_eq!(
-            lines.nth(1).unwrap(),
-            "comparing: a/different ⟶   b/different"
-        );
+        assert_eq!(lines.nth(1).unwrap(), "Δ a/different ⟶   b/different");
         // Change
         assert_eq!(lines.nth(7).unwrap(), "This is different from b");
         // File uniqueness
@@ -144,7 +143,7 @@ mod tests {
         // Next hunk
         assert_eq!(
             lines.nth(4).unwrap(),
-            "comparing: a/more_difference ⟶   b/more_difference"
+            "Δ a/more_difference ⟶   b/more_difference"
         );
     }
 
@@ -972,11 +971,10 @@ src/align.rs
         if args.contains(&"--max-line-length") {
             return;
         }
-        for n in 0..input_lines.len() {
-            let input_line = input_lines[n];
+        for (n, input_line) in input_lines.into_iter().enumerate() {
             // If config.line_numbers is enabled,
             // we should remove line_numbers decoration while checking.
-            let output_line = if config.line_numbers && n > 11 && n < input_lines.len() {
+            let output_line = if config.line_numbers && n > 11 {
                 &output_lines[n][14..]
             } else {
                 output_lines[n]
@@ -1473,7 +1471,7 @@ src/align.rs:71: impl<'a> Alignment<'a> { │
         let output = integration_test_utils::run_delta(example_diff, &config);
         let line = output.lines().nth(8).unwrap();
         if base_style_has_background_color {
-            let style = style::Style::from_str(base_style, None, None, true, false);
+            let style = style::Style::from_str(base_style, None, None, true, None);
             assert_eq!(
                 line,
                 &style
@@ -1532,7 +1530,7 @@ src/align.rs:71: impl<'a> Alignment<'a> { │
     }
 
     #[test]
-    fn test_color_only() {
+    fn test_color_only_mode() {
         let config = integration_test_utils::make_config_from_args(&["--color-only"]);
         let output = integration_test_utils::run_delta(GIT_DIFF_SINGLE_HUNK, &config);
         ansi_test_utils::assert_line_has_syntax_highlighted_substring(

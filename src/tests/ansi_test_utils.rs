@@ -129,10 +129,9 @@ pub mod ansi_test_utils {
         };
         painter.set_syntax(Some(language_extension));
         painter.set_highlighter();
-        let lines = vec![(format!(" {}", line), state.clone())];
+        let lines = vec![(line.to_string(), state.clone())];
         let syntax_style_sections = paint::Painter::get_syntax_style_sections_for_lines(
             &lines,
-            &state,
             painter.highlighter.as_mut(),
             config,
         );
@@ -167,7 +166,13 @@ pub mod ansi_test_utils {
     ) -> bool {
         let line = output.lines().nth(line_number).unwrap();
         assert!(ansi::strip_ansi_codes(line).starts_with(expected_prefix));
-        let mut style = Style::from_str(expected_style, None, None, config.true_color, false);
+        let mut style = Style::from_str(
+            expected_style,
+            None,
+            None,
+            config.true_color,
+            config.git_config.as_ref(),
+        );
         if _4_bit_color {
             style.ansi_term_style.foreground = style
                 .ansi_term_style

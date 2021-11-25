@@ -1,4 +1,5 @@
 use std::borrow::Cow;
+use std::collections::HashMap;
 use std::io::BufRead;
 use std::io::Write;
 
@@ -13,7 +14,7 @@ use crate::style::DecorationStyle;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum State {
-    CommitMeta,                 // In commit metadata section
+    CommitMeta,                    // In commit metadata section
     FileMeta, // In diff metadata section, between (possible) commit metadata and first hunk
     HunkHeader(String, String), // In hunk metadata line (line, raw_line)
     HunkZero, // In hunk; unchanged line
@@ -21,6 +22,9 @@ pub enum State {
     HunkPlus(Option<String>), // In hunk; added line (raw_line)
     SubmoduleLog, // In a submodule section, with gitconfig diff.submodule = log
     SubmoduleShort(String), // In a submodule section, with gitconfig diff.submodule = short
+    Blame(String, Option<String>), // In a line of `git blame` output (commit, repeat_blame_line).
+    GitShowFile, // In a line of `git show $revision:./path/to/file.ext` output
+    Grep,     // In a line of `git grep` output
     Unknown,
     // The following elements are created when a line is wrapped to display it:
     HunkZeroWrapped,  // Wrapped unchanged line
@@ -67,6 +71,7 @@ pub struct StateMachine<'a> {
     // avoid emitting the file meta header line twice (#245).
     pub current_file_pair: Option<(String, String)>,
     pub handled_file_meta_header_line_file_pair: Option<(String, String)>,
+    pub blame_commit_colors: HashMap<String, String>,
 }
 
 pub fn delta<I>(lines: ByteLines<I>, writer: &mut dyn Write, config: &Config) -> std::io::Result<()>
@@ -92,6 +97,7 @@ impl<'a> StateMachine<'a> {
             handled_file_meta_header_line_file_pair: None,
             painter: Painter::new(writer, config),
             config,
+            blame_commit_colors: HashMap::new(),
         }
     }
 
@@ -116,6 +122,9 @@ impl<'a> StateMachine<'a> {
                 || self.handle_submodule_log_line()?
                 || self.handle_submodule_short_line()?
                 || self.handle_hunk_line()?
+                || self.handle_git_show_file_line()?
+                || self.handle_blame_line()?
+                || self.handle_grep_line()?
                 || self.should_skip_line()
                 || self.emit_line_unchanged()?;
         }
@@ -128,7 +137,13 @@ impl<'a> StateMachine<'a> {
     fn ingest_line(&mut self, raw_line_bytes: &[u8]) {
         // TODO: retain raw_line as Cow
         self.raw_line = String::from_utf8_lossy(raw_line_bytes).to_string();
-        if self.config.max_line_length > 0 && self.raw_line.len() > self.config.max_line_length {
+        if self.config.max_line_length > 0
+            && self.raw_line.len() > self.config.max_line_length
+            // We must not truncate ripgrep --json output
+            // TODO: An alternative might be to truncate `line` but retain
+            // `raw_line` untruncated?
+            && !self.raw_line.starts_with('{')
+        {
             self.raw_line = ansi::truncate_str(
                 &self.raw_line,
                 self.config.max_line_length,
