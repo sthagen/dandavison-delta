@@ -13,12 +13,13 @@ use crate::edits;
 use crate::features::hyperlinks;
 use crate::features::line_numbers;
 use crate::features::side_by_side::ansifill;
-use crate::features::side_by_side::{self, available_line_width, LineSegments, PanelSide};
+use crate::features::side_by_side::{self, PanelSide};
 use crate::minusplus::*;
 use crate::paint::superimpose_style_sections::superimpose_style_sections;
 use crate::style::Style;
-use crate::wrapping::wrap_minusplus_block;
 use crate::{ansi, style};
+
+pub type LineSections<'a, S> = Vec<(S, &'a str)>;
 
 pub struct Painter<'p> {
     pub minus_lines: Vec<(String, State)>,
@@ -60,7 +61,7 @@ impl Default for BgShouldFill {
 #[derive(PartialEq, Debug)]
 pub enum StyleSectionSpecifier<'l> {
     Style(Style),
-    StyleSections(LineSegments<'l, Style>),
+    StyleSections(LineSections<'l, Style>),
 }
 
 impl<'p> Painter<'p> {
@@ -135,9 +136,13 @@ impl<'p> Painter<'p> {
         }
     }
 
-    // Remove initial -/+ character, and expand tabs as spaces, retaining ANSI sequences.
+    // Remove initial -/+ character, expand tabs as spaces, retaining ANSI sequences. Terminate with
+    // newline character.
     pub fn prepare_raw_line(&self, raw_line: &str) -> String {
-        ansi::ansi_preserving_slice(&self.expand_tabs(raw_line.graphemes(true)), 1)
+        format!(
+            "{}\n",
+            ansi::ansi_preserving_slice(&self.expand_tabs(raw_line.graphemes(true)), 1),
+        )
     }
 
     /// Expand tabs as spaces.
@@ -170,85 +175,21 @@ impl<'p> Painter<'p> {
             Self::get_diff_style_sections(&self.minus_lines, &self.plus_lines, self.config);
 
         if self.config.side_by_side {
-            let syntax_left_right = MinusPlus::new(
-                minus_line_syntax_style_sections,
-                plus_line_syntax_style_sections,
-            );
-            let diff_left_right = MinusPlus::new(
-                minus_line_diff_style_sections,
-                plus_line_diff_style_sections,
-            );
-
-            let states_left_right = MinusPlus::new(
-                self.minus_lines
-                    .iter()
-                    .map(|(_, state)| state.clone())
-                    .collect(),
-                self.plus_lines
-                    .iter()
-                    .map(|(_, state)| state.clone())
-                    .collect(),
-            );
-
-            let line_numbers_data = self.line_numbers_data.as_mut().unwrap_or_else(|| {
-                delta_unreachable("side-by-side requires Some(line_numbers_data)")
-            });
-
-            let bg_fill_left_right = MinusPlus::new(
-                // Using an ANSI sequence to fill the left panel would not work.
-                BgShouldFill::With(BgFillMethod::Spaces),
-                // Use what is configured for the right side.
-                BgShouldFill::With(self.config.line_fill_method),
-            );
-
-            // Only set `should_wrap` to true if wrapping is wanted and lines which are
-            // too long are found.
-            // If so, remember the calculated line width and which of the lines are too
-            // long for later re-use.
-            let (should_wrap, line_width, long_lines) = {
-                if self.config.wrap_config.max_lines == 1 {
-                    (false, MinusPlus::default(), MinusPlus::default())
-                } else {
-                    let line_width = available_line_width(self.config, line_numbers_data);
-
-                    let lines = MinusPlus::new(&self.minus_lines, &self.plus_lines);
-
-                    let (should_wrap, long_lines) =
-                        side_by_side::has_long_lines(&lines, &line_width);
-
-                    (should_wrap, line_width, long_lines)
-                }
-            };
-
-            let (line_alignment, line_states, syntax_left_right, diff_left_right) = if should_wrap {
-                // Calculated for syntect::highlighting::style::Style and delta::Style
-                wrap_minusplus_block(
-                    self.config,
-                    syntax_left_right,
-                    diff_left_right,
-                    &line_alignment,
-                    &line_width,
-                    &long_lines,
-                )
-            } else {
-                (
-                    line_alignment,
-                    states_left_right,
-                    syntax_left_right,
-                    diff_left_right,
-                )
-            };
-
             side_by_side::paint_minus_and_plus_lines_side_by_side(
-                syntax_left_right,
-                diff_left_right,
-                line_states,
+                MinusPlus::new(&self.minus_lines, &self.plus_lines),
+                MinusPlus::new(
+                    minus_line_syntax_style_sections,
+                    plus_line_syntax_style_sections,
+                ),
+                MinusPlus::new(
+                    minus_line_diff_style_sections,
+                    plus_line_diff_style_sections,
+                ),
                 line_alignment,
+                &mut self.line_numbers_data,
                 &mut self.output_buffer,
                 self.config,
-                &mut Some(line_numbers_data),
-                bg_fill_left_right,
-            );
+            )
         } else {
             // Unified mode:
 
@@ -339,8 +280,8 @@ impl<'p> Painter<'p> {
     /// highlighting styles, and write colored lines to output buffer.
     #[allow(clippy::too_many_arguments)]
     pub fn paint_lines<'a>(
-        syntax_style_sections: Vec<LineSegments<'a, SyntectStyle>>,
-        diff_style_sections: Vec<LineSegments<'a, Style>>,
+        syntax_style_sections: Vec<LineSections<'a, SyntectStyle>>,
+        diff_style_sections: Vec<LineSections<'a, Style>>,
         states: impl Iterator<Item = &'a State>,
         output_buffer: &mut String,
         config: &config::Config,
@@ -626,7 +567,7 @@ impl<'p> Painter<'p> {
         lines: &'a [(String, State)],
         highlighter: Option<&mut HighlightLines>,
         config: &config::Config,
-    ) -> Vec<LineSegments<'a, SyntectStyle>> {
+    ) -> Vec<LineSections<'a, SyntectStyle>> {
         let mut line_sections = Vec::new();
         match (
             highlighter,
@@ -655,8 +596,8 @@ impl<'p> Painter<'p> {
         plus_lines_and_states: &'a [(String, State)],
         config: &config::Config,
     ) -> (
-        Vec<LineSegments<'a, Style>>,
-        Vec<LineSegments<'a, Style>>,
+        Vec<LineSections<'a, Style>>,
+        Vec<LineSections<'a, Style>>,
         Vec<(Option<usize>, Option<usize>)>,
     ) {
         let (minus_lines, minus_styles): (Vec<&str>, Vec<Style>) = minus_lines_and_states
@@ -720,7 +661,7 @@ impl<'p> Painter<'p> {
     ///    how support for git's --color-moved is implemented.)
     fn update_styles<'a>(
         lines_and_states: &'a [(String, State)],
-        lines_style_sections: &mut Vec<LineSegments<'a, Style>>,
+        lines_style_sections: &mut Vec<LineSections<'a, Style>>,
         whitespace_error_style: Option<Style>,
         non_emph_style: Option<Style>,
         config: &config::Config,
@@ -759,7 +700,7 @@ impl<'p> Painter<'p> {
 pub fn parse_style_sections<'a>(
     raw_line: &'a str,
     config: &config::Config,
-) -> LineSegments<'a, Style> {
+) -> LineSections<'a, Style> {
     let empty_map = HashMap::new();
     let styles_map = config.styles_map.as_ref().unwrap_or(&empty_map);
     ansi::parse_style_sections(raw_line)
