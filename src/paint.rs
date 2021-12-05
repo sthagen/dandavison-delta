@@ -161,43 +161,49 @@ impl<'p> Painter<'p> {
     }
 
     pub fn paint_buffered_minus_and_plus_lines(&mut self) {
-        let minus_line_syntax_style_sections = Self::get_syntax_style_sections_for_lines(
-            &self.minus_lines,
-            self.highlighter.as_mut(),
+        let lines = MinusPlus::new(&self.minus_lines, &self.plus_lines);
+        let syntax_style_sections = MinusPlus::new(
+            Self::get_syntax_style_sections_for_lines(
+                lines[Minus],
+                self.highlighter.as_mut(),
+                self.config,
+            ),
+            Self::get_syntax_style_sections_for_lines(
+                lines[Plus],
+                self.highlighter.as_mut(),
+                self.config,
+            ),
+        );
+        let (mut diff_style_sections, line_alignment) =
+            Self::get_diff_style_sections(&lines, self.config);
+        let lines_have_homolog = edits::make_lines_have_homolog(&line_alignment);
+
+        Self::update_diff_style_sections(
+            &lines,
+            &mut diff_style_sections,
+            &lines_have_homolog,
             self.config,
         );
-        let plus_line_syntax_style_sections = Self::get_syntax_style_sections_for_lines(
-            &self.plus_lines,
-            self.highlighter.as_mut(),
-            self.config,
-        );
-        let (minus_line_diff_style_sections, plus_line_diff_style_sections, line_alignment) =
-            Self::get_diff_style_sections(&self.minus_lines, &self.plus_lines, self.config);
 
         if self.config.side_by_side {
             side_by_side::paint_minus_and_plus_lines_side_by_side(
-                MinusPlus::new(&self.minus_lines, &self.plus_lines),
-                MinusPlus::new(
-                    minus_line_syntax_style_sections,
-                    plus_line_syntax_style_sections,
-                ),
-                MinusPlus::new(
-                    minus_line_diff_style_sections,
-                    plus_line_diff_style_sections,
-                ),
+                lines,
+                syntax_style_sections,
+                diff_style_sections,
+                lines_have_homolog,
                 line_alignment,
                 &mut self.line_numbers_data,
                 &mut self.output_buffer,
                 self.config,
             )
         } else {
-            // Unified mode:
-
+            // Unified diff mode:
             if !self.minus_lines.is_empty() {
                 Painter::paint_lines(
-                    minus_line_syntax_style_sections,
-                    minus_line_diff_style_sections,
-                    self.minus_lines.iter().map(|(_, state)| state),
+                    lines[Minus],
+                    &syntax_style_sections[Minus],
+                    &diff_style_sections[Minus],
+                    &lines_have_homolog[Minus],
                     &mut self.output_buffer,
                     self.config,
                     &mut self.line_numbers_data.as_mut(),
@@ -212,9 +218,10 @@ impl<'p> Painter<'p> {
             }
             if !self.plus_lines.is_empty() {
                 Painter::paint_lines(
-                    plus_line_syntax_style_sections,
-                    plus_line_diff_style_sections,
-                    self.plus_lines.iter().map(|(_, state)| state),
+                    lines[Plus],
+                    &syntax_style_sections[Plus],
+                    &diff_style_sections[Plus],
+                    &lines_have_homolog[Plus],
                     &mut self.output_buffer,
                     self.config,
                     &mut self.line_numbers_data.as_mut(),
@@ -241,7 +248,7 @@ impl<'p> Painter<'p> {
             None
         };
 
-        let lines = vec![(self.prepare(line), state.clone())];
+        let lines = vec![(self.prepare(line), state)];
         let syntax_style_sections = Painter::get_syntax_style_sections_for_lines(
             &lines,
             self.highlighter.as_mut(),
@@ -263,9 +270,10 @@ impl<'p> Painter<'p> {
             );
         } else {
             Painter::paint_lines(
-                syntax_style_sections,
-                vec![diff_style_sections],
-                [state].iter(),
+                &lines,
+                &syntax_style_sections,
+                &[diff_style_sections],
+                &[false],
                 &mut self.output_buffer,
                 self.config,
                 &mut self.line_numbers_data.as_mut(),
@@ -280,9 +288,10 @@ impl<'p> Painter<'p> {
     /// highlighting styles, and write colored lines to output buffer.
     #[allow(clippy::too_many_arguments)]
     pub fn paint_lines<'a>(
-        syntax_style_sections: Vec<LineSections<'a, SyntectStyle>>,
-        diff_style_sections: Vec<LineSections<'a, Style>>,
-        states: impl Iterator<Item = &'a State>,
+        lines: &'a [(String, State)],
+        syntax_style_sections: &[LineSections<'a, SyntectStyle>],
+        diff_style_sections: &[LineSections<'a, Style>],
+        lines_have_homolog: &[bool],
         output_buffer: &mut String,
         config: &config::Config,
         line_numbers_data: &mut Option<&mut line_numbers::LineNumbersData>,
@@ -297,11 +306,12 @@ impl<'p> Painter<'p> {
         // 2. We must ensure that we fill rightwards with the appropriate
         //    non-emph background color. In that case we don't use the last
         //    style of the line, because this might be emph.
-        for (state, (syntax_sections, diff_sections)) in states.zip_eq(
-            syntax_style_sections
-                .iter()
-                .zip_eq(diff_style_sections.iter()),
-        ) {
+        for ((((_, state), syntax_sections), diff_sections), &line_has_homolog) in lines
+            .iter()
+            .zip_eq(syntax_style_sections)
+            .zip_eq(diff_style_sections)
+            .zip_eq(lines_have_homolog)
+        {
             let (mut line, line_is_empty) = Painter::paint_line(
                 syntax_sections,
                 diff_sections,
@@ -314,6 +324,7 @@ impl<'p> Painter<'p> {
             let (bg_fill_mode, fill_style) =
                 Painter::get_should_right_fill_background_color_and_fill_style(
                     diff_sections,
+                    Some(line_has_homolog),
                     state,
                     background_color_extends_to_terminal_width,
                     config,
@@ -354,7 +365,7 @@ impl<'p> Painter<'p> {
         state: State,
         background_color_extends_to_terminal_width: BgShouldFill,
     ) {
-        let lines = vec![(self.expand_tabs(line.graphemes(true)), state.clone())];
+        let lines = vec![(self.expand_tabs(line.graphemes(true)), state)];
         let syntax_style_sections = Painter::get_syntax_style_sections_for_lines(
             &lines,
             self.highlighter.as_mut(),
@@ -365,9 +376,10 @@ impl<'p> Painter<'p> {
             StyleSectionSpecifier::StyleSections(style_sections) => vec![style_sections],
         };
         Painter::paint_lines(
-            syntax_style_sections,
-            diff_style_sections,
-            [state].iter(),
+            &lines,
+            &syntax_style_sections,
+            &diff_style_sections,
+            &[false],
             &mut self.output_buffer,
             self.config,
             &mut None,
@@ -381,35 +393,42 @@ impl<'p> Painter<'p> {
     /// the style for doing so.
     pub fn get_should_right_fill_background_color_and_fill_style(
         diff_sections: &[(Style, &str)],
+        line_has_homolog: Option<bool>,
         state: &State,
         background_color_extends_to_terminal_width: BgShouldFill,
         config: &config::Config,
     ) -> (Option<BgFillMethod>, Style) {
-        // style:          for right fill if line contains no emph sections
-        // non_emph_style: for right fill if line contains emph sections
-        let (style, non_emph_style) = match state {
+        let fill_style = match state {
             State::HunkMinus(None) | State::HunkMinusWrapped => {
-                (config.minus_style, config.minus_non_emph_style)
+                if let Some(true) = line_has_homolog {
+                    config.minus_non_emph_style
+                } else {
+                    config.minus_style
+                }
             }
-            State::HunkZero | State::HunkZeroWrapped => (config.zero_style, config.zero_style),
+            State::HunkZero | State::HunkZeroWrapped => config.zero_style,
             State::HunkPlus(None) | State::HunkPlusWrapped => {
-                (config.plus_style, config.plus_non_emph_style)
+                if let Some(true) = line_has_homolog {
+                    config.plus_non_emph_style
+                } else {
+                    config.plus_style
+                }
             }
             State::HunkMinus(Some(_)) | State::HunkPlus(Some(_)) => {
-                let style = if !diff_sections.is_empty() {
-                    diff_sections[diff_sections.len() - 1].0
-                } else {
-                    config.null_style
-                };
-                (style, style)
+                // Consider the following raw line, from git colorMoved:
+                // ␛[1;36m+␛[m␛[1;36mclass·X:·pass␛[m␊ The last style section returned by
+                // parse_style_sections will be a default style associated with the terminal newline
+                // character; we want the last "real" style.
+                diff_sections
+                    .iter()
+                    .rev()
+                    .filter(|(_, s)| s != &"\n")
+                    .map(|(style, _)| *style)
+                    .next()
+                    .unwrap_or(config.null_style)
             }
-            State::Blame(_, _) => (diff_sections[0].0, diff_sections[0].0),
-            _ => (config.null_style, config.null_style),
-        };
-        let fill_style = if style_sections_contain_more_than_one_style(diff_sections) {
-            non_emph_style // line contains an emph section
-        } else {
-            style
+            State::Blame(_, _) => diff_sections[0].0,
+            _ => config.null_style,
         };
 
         match (
@@ -549,7 +568,7 @@ impl<'p> Painter<'p> {
             State::Grep => true,
             State::Unknown
             | State::CommitMeta
-            | State::FileMeta
+            | State::DiffHeader
             | State::HunkMinusWrapped
             | State::HunkZeroWrapped
             | State::HunkPlusWrapped
@@ -589,62 +608,40 @@ impl<'p> Painter<'p> {
         line_sections
     }
 
-    /// Set background styles to represent diff for minus and plus lines in buffer.
+    /// Get background styles to represent diff for minus and plus lines in buffer.
     #[allow(clippy::type_complexity)]
     fn get_diff_style_sections<'a>(
-        minus_lines_and_states: &'a [(String, State)],
-        plus_lines_and_states: &'a [(String, State)],
+        lines: &MinusPlus<&'a Vec<(String, State)>>,
         config: &config::Config,
     ) -> (
-        Vec<LineSections<'a, Style>>,
-        Vec<LineSections<'a, Style>>,
+        MinusPlus<Vec<LineSections<'a, Style>>>,
         Vec<(Option<usize>, Option<usize>)>,
     ) {
-        let (minus_lines, minus_styles): (Vec<&str>, Vec<Style>) = minus_lines_and_states
+        let (minus_lines, minus_styles): (Vec<&str>, Vec<Style>) = lines[Minus]
             .iter()
-            .map(|(s, t)| (s.as_str(), *config.get_style(t)))
+            .map(|(s, state)| (s.as_str(), *config.get_style(state)))
             .unzip();
-        let (plus_lines, plus_styles): (Vec<&str>, Vec<Style>) = plus_lines_and_states
+        let (plus_lines, plus_styles): (Vec<&str>, Vec<Style>) = lines[Plus]
             .iter()
-            .map(|(s, t)| (s.as_str(), *config.get_style(t)))
+            .map(|(s, state)| (s.as_str(), *config.get_style(state)))
             .unzip();
-        let mut diff_sections = edits::infer_edits(
-            minus_lines,
-            plus_lines,
-            minus_styles,
-            config.minus_emph_style, // FIXME
-            plus_styles,
-            config.plus_emph_style, // FIXME
-            &config.tokenization_regex,
-            config.max_line_distance,
-            config.max_line_distance_for_naively_paired_lines,
+        let (minus_line_diff_style_sections, plus_line_diff_style_sections, line_alignment) =
+            edits::infer_edits(
+                minus_lines,
+                plus_lines,
+                minus_styles,
+                config.minus_emph_style, // FIXME
+                plus_styles,
+                config.plus_emph_style, // FIXME
+                &config.tokenization_regex,
+                config.max_line_distance,
+                config.max_line_distance_for_naively_paired_lines,
+            );
+        let diff_sections = MinusPlus::new(
+            minus_line_diff_style_sections,
+            plus_line_diff_style_sections,
         );
-        let minus_non_emph_style = if config.minus_non_emph_style != config.minus_emph_style {
-            Some(config.minus_non_emph_style)
-        } else {
-            None
-        };
-        let mut lines_style_sections = MinusPlus::new(&mut diff_sections.0, &mut diff_sections.1);
-        Self::update_styles(
-            minus_lines_and_states,
-            lines_style_sections[Minus],
-            None,
-            minus_non_emph_style,
-            config,
-        );
-        let plus_non_emph_style = if config.plus_non_emph_style != config.plus_emph_style {
-            Some(config.plus_non_emph_style)
-        } else {
-            None
-        };
-        Self::update_styles(
-            plus_lines_and_states,
-            lines_style_sections[Plus],
-            Some(config.whitespace_error_style),
-            plus_non_emph_style,
-            config,
-        );
-        diff_sections
+        (diff_sections, line_alignment)
     }
 
     /// There are some rules according to which we update line section styles that were computed
@@ -659,31 +656,71 @@ impl<'p> Painter<'p> {
     ///    are going to be preserved in the output, then replace delta's
     ///    computed diff styles with these styles from the raw line. (This is
     ///    how support for git's --color-moved is implemented.)
+    fn update_diff_style_sections<'a>(
+        lines: &MinusPlus<&'a Vec<(String, State)>>,
+        lines_style_sections: &mut MinusPlus<Vec<LineSections<'a, Style>>>,
+        lines_have_homolog: &MinusPlus<Vec<bool>>,
+        config: &config::Config,
+    ) {
+        Self::update_styles(
+            lines[Minus],
+            &mut lines_style_sections[Minus],
+            None,
+            if config.minus_non_emph_style != config.minus_emph_style {
+                Some(config.minus_non_emph_style)
+            } else {
+                None
+            },
+            &lines_have_homolog[Minus],
+            config,
+        );
+        Self::update_styles(
+            lines[Plus],
+            &mut lines_style_sections[Plus],
+            Some(config.whitespace_error_style),
+            if config.plus_non_emph_style != config.plus_emph_style {
+                Some(config.plus_non_emph_style)
+            } else {
+                None
+            },
+            &lines_have_homolog[Plus],
+            config,
+        );
+    }
+
     fn update_styles<'a>(
-        lines_and_states: &'a [(String, State)],
+        lines: &'a [(String, State)],
         lines_style_sections: &mut Vec<LineSections<'a, Style>>,
         whitespace_error_style: Option<Style>,
         non_emph_style: Option<Style>,
+        lines_have_homolog: &[bool],
         config: &config::Config,
     ) {
-        for ((_, state), style_sections) in lines_and_states.iter().zip(lines_style_sections) {
-            match state {
-                State::HunkMinus(Some(raw_line)) | State::HunkPlus(Some(raw_line)) => {
-                    *style_sections = parse_style_sections(raw_line, config);
-                    continue;
-                }
-                _ => {}
-            };
+        for (((_, state), style_sections), line_has_homolog) in lines
+            .iter()
+            .zip_eq(lines_style_sections)
+            .zip_eq(lines_have_homolog)
+        {
+            if let State::HunkMinus(Some(raw_line)) | State::HunkPlus(Some(raw_line)) = state {
+                // raw_line is captured in handle_hunk_line under certain conditions. If we have
+                // done so, then overwrite the style sections with styles parsed directly from the
+                // raw line. Currently the only reason this is done is to handle a diff.colorMoved
+                // line.
+                *style_sections = parse_style_sections(raw_line, config);
+                continue;
+            }
             let line_has_emph_and_non_emph_sections =
                 style_sections_contain_more_than_one_style(style_sections);
-            let should_update_non_emph_styles =
-                non_emph_style.is_some() && line_has_emph_and_non_emph_sections;
+            let should_update_non_emph_styles = non_emph_style.is_some() && *line_has_homolog;
             let is_whitespace_error =
                 whitespace_error_style.is_some() && is_whitespace_error(style_sections);
             for (style, _) in style_sections.iter_mut() {
                 // If the line as a whole constitutes a whitespace error then highlight this
                 // section if either (a) it is an emph section, or (b) the line lacks any
                 // emph/non-emph distinction.
+
+                // TODO: is this logic correct now, after introducing
+                // line_has_homolog for non_emph style?
                 if is_whitespace_error && (style.is_emph || !line_has_emph_and_non_emph_sections) {
                     *style = whitespace_error_style.unwrap();
                 }

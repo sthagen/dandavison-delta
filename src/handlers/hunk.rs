@@ -1,21 +1,33 @@
+use lazy_static::lazy_static;
+
 use crate::cli;
 use crate::delta::{State, StateMachine};
 use crate::style;
+use crate::utils::process::{self, CallingProcess};
 use unicode_segmentation::UnicodeSegmentation;
 
-impl State {
-    fn is_in_hunk(&self) -> bool {
-        matches!(
-            *self,
-            State::HunkHeader(_, _) | State::HunkZero | State::HunkMinus(_) | State::HunkPlus(_)
-        )
-    }
+lazy_static! {
+    static ref IS_WORD_DIFF: bool = match process::calling_process().as_deref() {
+        Some(
+            CallingProcess::GitDiff(cmd_line)
+            | CallingProcess::GitShow(cmd_line, _)
+            | CallingProcess::GitLog(cmd_line)
+            | CallingProcess::GitReflog(cmd_line),
+        ) =>
+            cmd_line.long_options.contains("--word-diff")
+                || cmd_line.long_options.contains("--word-diff-regex")
+                || cmd_line.long_options.contains("--color-words"),
+        _ => false,
+    };
 }
 
 impl<'a> StateMachine<'a> {
     #[inline]
     fn test_hunk_line(&self) -> bool {
-        self.state.is_in_hunk()
+        matches!(
+            self.state,
+            State::HunkHeader(_, _) | State::HunkZero | State::HunkMinus(_) | State::HunkPlus(_)
+        ) && !&*IS_WORD_DIFF
     }
 
     /// Handle a hunk line, i.e. a minus line, a plus line, or an unchanged line.
@@ -44,6 +56,8 @@ impl<'a> StateMachine<'a> {
         self.state = match self.line.chars().next() {
             Some('-') => {
                 if let State::HunkPlus(_) = self.state {
+                    // We have just entered a new subhunk; process the previous one
+                    // and flush the line buffers.
                     self.painter.paint_buffered_minus_and_plus_lines();
                 }
                 let state = match self.config.inspect_raw_lines {
@@ -88,6 +102,10 @@ impl<'a> StateMachine<'a> {
                 // The first character here could be e.g. '\' from '\ No newline at end of file'. This
                 // is not a hunk line, but the parser does not have a more accurate state corresponding
                 // to this.
+
+                // We are in a zero (unchanged) line, therefore we have just exited a subhunk (a
+                // sequence of consecutive minus (removed) and/or plus (added) lines). Process that
+                // subhunk and flush the line buffers.
                 self.painter.paint_buffered_minus_and_plus_lines();
                 self.painter
                     .output_buffer
