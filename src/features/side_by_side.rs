@@ -5,6 +5,7 @@ use unicode_segmentation::UnicodeSegmentation;
 use crate::ansi;
 use crate::cli;
 use crate::config::{self, delta_unreachable, Config};
+use crate::delta::DiffType;
 use crate::delta::State;
 use crate::edits;
 use crate::features::{line_numbers, OptionValueFunction};
@@ -180,7 +181,7 @@ pub fn paint_minus_and_plus_lines_side_by_side(
             &lines_have_homolog[Left],
             match minus_line_index {
                 Some(i) => &line_states[Left][i],
-                None => &State::HunkMinus(None),
+                None => &State::HunkMinus(DiffType::Unified, None),
             },
             &mut Some(line_numbers_data),
             bg_should_fill[Left],
@@ -201,7 +202,7 @@ pub fn paint_minus_and_plus_lines_side_by_side(
             &lines_have_homolog[Right],
             match plus_line_index {
                 Some(i) => &line_states[Right][i],
-                None => &State::HunkPlus(None),
+                None => &State::HunkPlus(DiffType::Unified, None),
             },
             &mut Some(line_numbers_data),
             bg_should_fill[Right],
@@ -222,7 +223,7 @@ pub fn paint_zero_lines_side_by_side<'a>(
     painted_prefix: Option<ansi_term::ANSIString>,
     background_color_extends_to_terminal_width: BgShouldFill,
 ) {
-    let states = vec![State::HunkZero];
+    let states = vec![State::HunkZero(DiffType::Unified)];
 
     let (states, syntax_style_sections, diff_style_sections) = wrap_zero_block(
         config,
@@ -418,8 +419,12 @@ fn paint_minus_or_plus_panel_line<'a>(
             )
         } else {
             let opposite_state = match state {
-                State::HunkMinus(x) => State::HunkPlus(x.clone()),
-                State::HunkPlus(x) => State::HunkMinus(x.clone()),
+                State::HunkMinus(DiffType::Unified, s) => {
+                    State::HunkPlus(DiffType::Unified, s.clone())
+                }
+                State::HunkPlus(DiffType::Unified, s) => {
+                    State::HunkMinus(DiffType::Unified, s.clone())
+                }
                 _ => unreachable!(),
             };
             (
@@ -470,17 +475,17 @@ fn pad_panel_line_to_width<'a>(
     // to form the other half of the line, then don't emit the empty line marker.
     if panel_line_is_empty && line_index.is_some() {
         match state {
-            State::HunkMinus(_) => Painter::mark_empty_line(
+            State::HunkMinus(_, _) => Painter::mark_empty_line(
                 &config.minus_empty_line_marker_style,
                 panel_line,
                 Some(" "),
             ),
-            State::HunkPlus(_) => Painter::mark_empty_line(
+            State::HunkPlus(_, _) => Painter::mark_empty_line(
                 &config.plus_empty_line_marker_style,
                 panel_line,
                 Some(" "),
             ),
-            State::HunkZero => {}
+            State::HunkZero(_) => {}
             _ => unreachable!(),
         };
     };

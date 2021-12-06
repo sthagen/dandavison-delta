@@ -25,38 +25,83 @@ use lazy_static::lazy_static;
 use regex::Regex;
 
 use super::draw;
-use crate::config::Config;
-use crate::delta::{self, State, StateMachine};
+use crate::config::{delta_unreachable, Config};
+use crate::delta::{self, DiffType, InMergeConflict, MergeParents, State, StateMachine};
 use crate::paint::{self, BgShouldFill, Painter, StyleSectionSpecifier};
 use crate::style::DecorationStyle;
+
+#[derive(Clone, Default, Debug, PartialEq)]
+pub struct ParsedHunkHeader {
+    code_fragment: String,
+    line_numbers_and_hunk_lengths: Vec<(usize, usize)>,
+}
 
 impl<'a> StateMachine<'a> {
     #[inline]
     fn test_hunk_header_line(&self) -> bool {
-        self.line.starts_with("@@")
+        self.line.starts_with("@@") &&
+        // A hunk header can occur within a merge conflict region, but we don't attempt to handle
+        // that. See #822.
+        !matches!(self.state, State::MergeConflict(_, _))
     }
 
     pub fn handle_hunk_header_line(&mut self) -> std::io::Result<bool> {
+        use DiffType::*;
+        use State::*;
         if !self.test_hunk_header_line() {
             return Ok(false);
         }
-        self.state = State::HunkHeader(self.line.clone(), self.raw_line.clone());
-        Ok(true)
+        let mut handled_line = false;
+        if let Some(parsed_hunk_header) = parse_hunk_header(&self.line) {
+            let diff_type = match &self.state {
+                DiffHeader(Combined(MergeParents::Unknown, InMergeConflict::No)) => {
+                    // https://git-scm.com/docs/git-diff#_combined_diff_format
+                    let n_parents = self.line.chars().take_while(|c| c == &'@').count() - 1;
+                    Combined(MergeParents::Number(n_parents), InMergeConflict::No)
+                }
+                DiffHeader(diff_type)
+                | HunkMinus(diff_type, _)
+                | HunkZero(diff_type)
+                | HunkPlus(diff_type, _) => diff_type.clone(),
+                Unknown => Unified,
+                _ => delta_unreachable(&format!(
+                    "Unexpected state in handle_hunk_header: {:?}",
+                    self.state
+                )),
+            };
+            self.state = HunkHeader(
+                diff_type,
+                parsed_hunk_header,
+                self.line.clone(),
+                self.raw_line.clone(),
+            );
+            handled_line = true;
+        }
+        Ok(handled_line)
     }
 
     /// Emit the hunk header, with any requested decoration.
-    pub fn emit_hunk_header_line(&mut self, line: &str, raw_line: &str) -> std::io::Result<bool> {
+    pub fn emit_hunk_header_line(
+        &mut self,
+        parsed_hunk_header: &ParsedHunkHeader,
+        line: &str,
+        raw_line: &str,
+    ) -> std::io::Result<bool> {
         self.painter.paint_buffered_minus_and_plus_lines();
         self.painter.set_highlighter();
         self.painter.emit()?;
 
-        let (code_fragment, line_numbers) = parse_hunk_header(line);
+        let ParsedHunkHeader {
+            code_fragment,
+            line_numbers_and_hunk_lengths,
+        } = parsed_hunk_header;
+
         if self.config.line_numbers {
             self.painter
                 .line_numbers_data
                 .as_mut()
                 .unwrap()
-                .initialize_hunk(&line_numbers, self.plus_file.to_string());
+                .initialize_hunk(line_numbers_and_hunk_lengths, self.plus_file.to_string());
         }
 
         if self.config.hunk_header_style.is_raw {
@@ -71,8 +116,8 @@ impl<'a> StateMachine<'a> {
             }
 
             write_hunk_header(
-                &code_fragment,
-                &line_numbers,
+                code_fragment,
+                line_numbers_and_hunk_lengths,
                 &mut self.painter,
                 line,
                 if self.plus_file == "/dev/null" {
@@ -111,25 +156,31 @@ lazy_static! {
 /// Given input like
 /// "@@ -74,15 +74,14 @@ pub fn delta("
 /// Return " pub fn delta(" and a vector of (line_number, hunk_length) tuples.
-fn parse_hunk_header(line: &str) -> (String, Vec<(usize, usize)>) {
-    let caps = HUNK_HEADER_REGEX.captures(line).unwrap();
-    let file_coordinates = &caps[1];
-    let line_numbers_and_hunk_lengths = HUNK_HEADER_FILE_COORDINATE_REGEX
-        .captures_iter(file_coordinates)
-        .map(|caps| {
-            (
-                caps[1].parse::<usize>().unwrap(),
-                caps.get(2)
-                    .map(|m| m.as_str())
-                    // Per the specs linked above, if the hunk length is absent then it is 1.
-                    .unwrap_or("1")
-                    .parse::<usize>()
-                    .unwrap(),
-            )
+fn parse_hunk_header(line: &str) -> Option<ParsedHunkHeader> {
+    if let Some(caps) = HUNK_HEADER_REGEX.captures(line) {
+        let file_coordinates = &caps[1];
+        let line_numbers_and_hunk_lengths = HUNK_HEADER_FILE_COORDINATE_REGEX
+            .captures_iter(file_coordinates)
+            .map(|caps| {
+                (
+                    caps[1].parse::<usize>().unwrap(),
+                    caps.get(2)
+                        .map(|m| m.as_str())
+                        // Per the specs linked above, if the hunk length is absent then it is 1.
+                        .unwrap_or("1")
+                        .parse::<usize>()
+                        .unwrap(),
+                )
+            })
+            .collect();
+        let code_fragment = caps[2].to_string();
+        Some(ParsedHunkHeader {
+            code_fragment,
+            line_numbers_and_hunk_lengths,
         })
-        .collect();
-    let code_fragment = &caps[2];
-    (code_fragment.to_string(), line_numbers_and_hunk_lengths)
+    } else {
+        None
+    }
 }
 
 fn write_hunk_header_raw(
@@ -156,7 +207,7 @@ fn write_hunk_header_raw(
 
 pub fn write_hunk_header(
     code_fragment: &str,
-    line_numbers: &[(usize, usize)],
+    line_numbers_and_hunk_lengths: &[(usize, usize)],
     painter: &mut Painter,
     line: &str,
     plus_file: &str,
@@ -172,7 +223,7 @@ pub fn write_hunk_header(
         "".to_string()
     };
 
-    let plus_line_number = line_numbers[line_numbers.len() - 1].0;
+    let plus_line_number = line_numbers_and_hunk_lengths[line_numbers_and_hunk_lengths.len() - 1].0;
     let file_with_line_number =
         paint_file_path_with_line_number(Some(plus_line_number), plus_file, config);
 
@@ -251,7 +302,12 @@ fn write_to_output_buffer(
         painter.syntax_highlight_and_paint_line(
             &line,
             StyleSectionSpecifier::Style(config.hunk_header_style),
-            delta::State::HunkHeader("".to_owned(), "".to_owned()),
+            delta::State::HunkHeader(
+                DiffType::Unified,
+                ParsedHunkHeader::default(),
+                "".to_owned(),
+                "".to_owned(),
+            ),
             BgShouldFill::No,
         );
         painter.output_buffer.pop(); // trim newline
@@ -261,13 +317,15 @@ fn write_to_output_buffer(
 #[cfg(test)]
 pub mod tests {
     use super::*;
+    use crate::ansi::strip_ansi_codes;
     use crate::tests::integration_test_utils;
 
     #[test]
     fn test_parse_hunk_header() {
-        let parsed = parse_hunk_header("@@ -74,15 +75,14 @@ pub fn delta(\n");
-        let code_fragment = parsed.0;
-        let line_numbers_and_hunk_lengths = parsed.1;
+        let ParsedHunkHeader {
+            code_fragment,
+            line_numbers_and_hunk_lengths,
+        } = parse_hunk_header("@@ -74,15 +75,14 @@ pub fn delta(\n").unwrap();
         assert_eq!(code_fragment, " pub fn delta(\n");
         assert_eq!(line_numbers_and_hunk_lengths[0], (74, 15),);
         assert_eq!(line_numbers_and_hunk_lengths[1], (75, 14),);
@@ -275,9 +333,10 @@ pub mod tests {
 
     #[test]
     fn test_parse_hunk_header_with_omitted_hunk_lengths() {
-        let parsed = parse_hunk_header("@@ -74 +75,2 @@ pub fn delta(\n");
-        let code_fragment = parsed.0;
-        let line_numbers_and_hunk_lengths = parsed.1;
+        let ParsedHunkHeader {
+            code_fragment,
+            line_numbers_and_hunk_lengths,
+        } = parse_hunk_header("@@ -74 +75,2 @@ pub fn delta(\n").unwrap();
         assert_eq!(code_fragment, " pub fn delta(\n");
         assert_eq!(line_numbers_and_hunk_lengths[0], (74, 1),);
         assert_eq!(line_numbers_and_hunk_lengths[1], (75, 2),);
@@ -285,9 +344,10 @@ pub mod tests {
 
     #[test]
     fn test_parse_hunk_header_added_file() {
-        let parsed = parse_hunk_header("@@ -1,22 +0,0 @@");
-        let code_fragment = parsed.0;
-        let line_numbers_and_hunk_lengths = parsed.1;
+        let ParsedHunkHeader {
+            code_fragment,
+            line_numbers_and_hunk_lengths,
+        } = parse_hunk_header("@@ -1,22 +0,0 @@").unwrap();
         assert_eq!(code_fragment, "",);
         assert_eq!(line_numbers_and_hunk_lengths[0], (1, 22),);
         assert_eq!(line_numbers_and_hunk_lengths[1], (0, 0),);
@@ -295,9 +355,10 @@ pub mod tests {
 
     #[test]
     fn test_parse_hunk_header_deleted_file() {
-        let parsed = parse_hunk_header("@@ -0,0 +1,3 @@");
-        let code_fragment = parsed.0;
-        let line_numbers_and_hunk_lengths = parsed.1;
+        let ParsedHunkHeader {
+            code_fragment,
+            line_numbers_and_hunk_lengths,
+        } = parse_hunk_header("@@ -0,0 +1,3 @@").unwrap();
         assert_eq!(code_fragment, "",);
         assert_eq!(line_numbers_and_hunk_lengths[0], (0, 0),);
         assert_eq!(line_numbers_and_hunk_lengths[1], (1, 3),);
@@ -305,14 +366,29 @@ pub mod tests {
 
     #[test]
     fn test_parse_hunk_header_merge() {
-        let parsed = parse_hunk_header("@@@ -293,11 -358,15 +358,16 @@@ dependencies =");
-        let code_fragment = parsed.0;
-        let line_numbers_and_hunk_lengths = parsed.1;
+        let ParsedHunkHeader {
+            code_fragment,
+            line_numbers_and_hunk_lengths,
+        } = parse_hunk_header("@@@ -293,11 -358,15 +358,16 @@@ dependencies =").unwrap();
         assert_eq!(code_fragment, " dependencies =");
         assert_eq!(line_numbers_and_hunk_lengths[0], (293, 11),);
         assert_eq!(line_numbers_and_hunk_lengths[1], (358, 15),);
         assert_eq!(line_numbers_and_hunk_lengths[2], (358, 16),);
     }
+
+    #[test]
+    fn test_parse_hunk_header_cthulhu() {
+        let ParsedHunkHeader {
+            code_fragment,
+            line_numbers_and_hunk_lengths,
+        } = parse_hunk_header("@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ -446,6 -446,6 -446,6 -446,6 -446,6 -446,6 -446,6 -446,6 -446,6 -446,6 -446,6 -446,6 -446,6 -446,6 -446,6 -446,6 -446,6 -446,6 -446,6 -446,6 -446,6 -446,6 -444,17 -446,6 -446,6 -446,6 -446,6 -446,6 -446,6 -446,6 -446,6 -446,6 -446,6 -446,6 -446,6 -446,6 -446,6 -446,6 -446,6 -446,6 -446,6 -446,6 -446,6 -446,6 -446,6 -446,6 -446,6 -446,6 -446,6 -446,6 -446,6 -446,6 -446,6 -446,6 -446,6 -446,6 -446,6 -446,6 -446,6 -446,6 -446,6 -446,6 -446,6 -446,6 -446,6 -446,6 +444,17 @@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@@ int snd_soc_jack_add_gpios(struct snd_s").unwrap();
+        assert_eq!(code_fragment, " int snd_soc_jack_add_gpios(struct snd_s");
+        assert_eq!(line_numbers_and_hunk_lengths[0], (446, 6),);
+        assert_eq!(line_numbers_and_hunk_lengths[1], (446, 6),);
+        assert_eq!(line_numbers_and_hunk_lengths[2], (446, 6),);
+        assert_eq!(line_numbers_and_hunk_lengths[65], (446, 6),);
+    }
+
     #[test]
     fn test_paint_file_path_with_line_number_default() {
         let cfg = integration_test_utils::make_config_from_args(&[]);
@@ -375,4 +451,26 @@ pub mod tests {
 
         assert_eq!(result, "");
     }
+
+    #[test]
+    fn test_not_a_hunk_header_is_handled_gracefully() {
+        let config = integration_test_utils::make_config_from_args(&[]);
+        let output =
+            integration_test_utils::run_delta(GIT_LOG_OUTPUT_WITH_NOT_A_HUNK_HEADER, &config);
+        let output = strip_ansi_codes(&output);
+        assert!(output.contains("@@@2021-12-05"));
+    }
+
+    const GIT_LOG_OUTPUT_WITH_NOT_A_HUNK_HEADER: &str = "\
+@@@2021-12-05
+
+src/config.rs                  |   2 +-
+src/delta.rs                   |   3 ++-
+src/handlers/hunk.rs           |  12 ++++++------
+src/handlers/hunk_header.rs    | 119 +++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++++------------------------------------------
+src/handlers/merge_conflict.rs |   2 +-
+src/handlers/submodule.rs      |   4 ++--
+src/paint.rs                   |   2 +-
+7 files changed, 90 insertions(+), 54 deletions(-)
+";
 }

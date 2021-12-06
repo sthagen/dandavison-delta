@@ -1,6 +1,7 @@
 use std::collections::HashMap;
 use std::io::Write;
 
+use ansi_term::ANSIString;
 use itertools::Itertools;
 use syntect::easy::HighlightLines;
 use syntect::highlighting::Style as SyntectStyle;
@@ -8,12 +9,13 @@ use syntect::parsing::{SyntaxReference, SyntaxSet};
 use unicode_segmentation::UnicodeSegmentation;
 
 use crate::config::{self, delta_unreachable, Config};
-use crate::delta::State;
+use crate::delta::{DiffType, InMergeConflict, MergeParents, State};
 use crate::edits;
 use crate::features::hyperlinks;
-use crate::features::line_numbers;
+use crate::features::line_numbers::{self, LineNumbersData};
 use crate::features::side_by_side::ansifill;
 use crate::features::side_by_side::{self, PanelSide};
+use crate::handlers::merge_conflict;
 use crate::minusplus::*;
 use crate::paint::superimpose_style_sections::superimpose_style_sections;
 use crate::style::Style;
@@ -33,6 +35,8 @@ pub struct Painter<'p> {
     // In side-by-side mode it is always Some (but possibly an empty one), even
     // if config.line_numbers is false. See `UseFullPanelWidth` as well.
     pub line_numbers_data: Option<line_numbers::LineNumbersData<'p>>,
+    pub merge_conflict_lines: merge_conflict::MergeConflictLines,
+    pub merge_conflict_commit_names: merge_conflict::MergeConflictCommitNames,
 }
 
 // How the background of a line is filled up to the end
@@ -94,6 +98,8 @@ impl<'p> Painter<'p> {
             writer,
             config,
             line_numbers_data,
+            merge_conflict_lines: merge_conflict::MergeConflictLines::new(),
+            merge_conflict_commit_names: merge_conflict::MergeConflictCommitNames::new(),
         }
     }
 
@@ -122,26 +128,24 @@ impl<'p> Painter<'p> {
     // Terminating with newline character is necessary for many of the sublime syntax definitions to
     // highlight correctly.
     // See https://docs.rs/syntect/3.2.0/syntect/parsing/struct.SyntaxSetBuilder.html#method.add_from_folder
-    pub fn prepare(&self, line: &str) -> String {
+    pub fn prepare(&self, line: &str, prefix_length: usize) -> String {
         if !line.is_empty() {
-            let mut line = line.graphemes(true);
-
-            // The first column contains a -/+/space character, added by git. We remove it now so that
-            // it is not present during syntax highlighting or wrapping. If --keep-plus-minus-markers is
-            // in effect this character is re-inserted in Painter::paint_line.
-            line.next();
+            // The prefix contains -/+/space characters, added by git. We removes them now so they
+            // are not present during syntax highlighting or wrapping. If --keep-plus-minus-markers
+            // is in effect the prefix is re-inserted in Painter::paint_line.
+            let line = line.graphemes(true).skip(prefix_length);
             format!("{}\n", self.expand_tabs(line))
         } else {
             "\n".to_string()
         }
     }
 
-    // Remove initial -/+ character, expand tabs as spaces, retaining ANSI sequences. Terminate with
+    // Remove initial -/+ characters, expand tabs as spaces, retaining ANSI sequences. Terminate with
     // newline character.
-    pub fn prepare_raw_line(&self, raw_line: &str) -> String {
+    pub fn prepare_raw_line(&self, raw_line: &str, prefix_length: usize) -> String {
         format!(
             "{}\n",
-            ansi::ansi_preserving_slice(&self.expand_tabs(raw_line.graphemes(true)), 1),
+            ansi::ansi_preserving_slice(&self.expand_tabs(raw_line.graphemes(true)), prefix_length),
         )
     }
 
@@ -161,99 +165,23 @@ impl<'p> Painter<'p> {
     }
 
     pub fn paint_buffered_minus_and_plus_lines(&mut self) {
-        let lines = MinusPlus::new(&self.minus_lines, &self.plus_lines);
-        let syntax_style_sections = MinusPlus::new(
-            Self::get_syntax_style_sections_for_lines(
-                lines[Minus],
-                self.highlighter.as_mut(),
-                self.config,
-            ),
-            Self::get_syntax_style_sections_for_lines(
-                lines[Plus],
-                self.highlighter.as_mut(),
-                self.config,
-            ),
-        );
-        let (mut diff_style_sections, line_alignment) =
-            Self::get_diff_style_sections(&lines, self.config);
-        let lines_have_homolog = edits::make_lines_have_homolog(&line_alignment);
-
-        Self::update_diff_style_sections(
-            &lines,
-            &mut diff_style_sections,
-            &lines_have_homolog,
+        paint_minus_and_plus_lines(
+            MinusPlus::new(&self.minus_lines, &self.plus_lines),
+            &mut self.line_numbers_data,
+            &mut self.highlighter,
+            &mut self.output_buffer,
             self.config,
         );
-
-        if self.config.side_by_side {
-            side_by_side::paint_minus_and_plus_lines_side_by_side(
-                lines,
-                syntax_style_sections,
-                diff_style_sections,
-                lines_have_homolog,
-                line_alignment,
-                &mut self.line_numbers_data,
-                &mut self.output_buffer,
-                self.config,
-            )
-        } else {
-            // Unified diff mode:
-            if !self.minus_lines.is_empty() {
-                Painter::paint_lines(
-                    lines[Minus],
-                    &syntax_style_sections[Minus],
-                    &diff_style_sections[Minus],
-                    &lines_have_homolog[Minus],
-                    &mut self.output_buffer,
-                    self.config,
-                    &mut self.line_numbers_data.as_mut(),
-                    if self.config.keep_plus_minus_markers {
-                        Some(self.config.minus_style.paint("-"))
-                    } else {
-                        None
-                    },
-                    Some(self.config.minus_empty_line_marker_style),
-                    BgShouldFill::default(),
-                );
-            }
-            if !self.plus_lines.is_empty() {
-                Painter::paint_lines(
-                    lines[Plus],
-                    &syntax_style_sections[Plus],
-                    &diff_style_sections[Plus],
-                    &lines_have_homolog[Plus],
-                    &mut self.output_buffer,
-                    self.config,
-                    &mut self.line_numbers_data.as_mut(),
-                    if self.config.keep_plus_minus_markers {
-                        Some(self.config.plus_style.paint("+"))
-                    } else {
-                        None
-                    },
-                    Some(self.config.plus_empty_line_marker_style),
-                    BgShouldFill::default(),
-                );
-            }
-        }
         self.minus_lines.clear();
         self.plus_lines.clear();
     }
 
-    pub fn paint_zero_line(&mut self, line: &str) {
-        let state = State::HunkZero;
-        let painted_prefix = if self.config.keep_plus_minus_markers && !line.is_empty() {
-            // A zero line here still contains the " " prefix, so use it.
-            Some(self.config.zero_style.paint(&line[..1]))
-        } else {
-            None
-        };
-
-        let lines = vec![(self.prepare(line), state)];
-        let syntax_style_sections = Painter::get_syntax_style_sections_for_lines(
-            &lines,
-            self.highlighter.as_mut(),
-            self.config,
-        );
+    pub fn paint_zero_line(&mut self, line: &str, diff_type: DiffType) {
+        let line = self.prepare(line, diff_type.n_parents());
+        let state = State::HunkZero(diff_type);
+        let lines = vec![(line, state.clone())];
+        let syntax_style_sections =
+            get_syntax_style_sections_for_lines(&lines, self.highlighter.as_mut(), self.config);
         let diff_style_sections = vec![(self.config.zero_style, lines[0].0.as_str())]; // TODO: compute style from state
 
         if self.config.side_by_side {
@@ -265,7 +193,7 @@ impl<'p> Painter<'p> {
                 &mut self.output_buffer,
                 self.config,
                 &mut self.line_numbers_data.as_mut(),
-                painted_prefix,
+                painted_prefix(state, self.config),
                 BgShouldFill::With(BgFillMethod::Spaces),
             );
         } else {
@@ -277,7 +205,6 @@ impl<'p> Painter<'p> {
                 &mut self.output_buffer,
                 self.config,
                 &mut self.line_numbers_data.as_mut(),
-                painted_prefix,
                 None,
                 BgShouldFill::With(BgFillMethod::Spaces),
             );
@@ -295,7 +222,6 @@ impl<'p> Painter<'p> {
         output_buffer: &mut String,
         config: &config::Config,
         line_numbers_data: &mut Option<&mut line_numbers::LineNumbersData>,
-        painted_prefix: Option<ansi_term::ANSIString>,
         empty_line_style: Option<Style>, // a style with background color to highlight an empty line
         background_color_extends_to_terminal_width: BgShouldFill,
     ) {
@@ -318,7 +244,7 @@ impl<'p> Painter<'p> {
                 state,
                 line_numbers_data,
                 None,
-                painted_prefix.clone(),
+                painted_prefix(state.clone(), config),
                 config,
             );
             let (bg_fill_mode, fill_style) =
@@ -366,11 +292,8 @@ impl<'p> Painter<'p> {
         background_color_extends_to_terminal_width: BgShouldFill,
     ) {
         let lines = vec![(self.expand_tabs(line.graphemes(true)), state)];
-        let syntax_style_sections = Painter::get_syntax_style_sections_for_lines(
-            &lines,
-            self.highlighter.as_mut(),
-            self.config,
-        );
+        let syntax_style_sections =
+            get_syntax_style_sections_for_lines(&lines, self.highlighter.as_mut(), self.config);
         let diff_style_sections = match style_sections {
             StyleSectionSpecifier::Style(style) => vec![vec![(style, lines[0].0.as_str())]],
             StyleSectionSpecifier::StyleSections(style_sections) => vec![style_sections],
@@ -383,7 +306,6 @@ impl<'p> Painter<'p> {
             &mut self.output_buffer,
             self.config,
             &mut None,
-            None,
             None,
             background_color_extends_to_terminal_width,
         );
@@ -399,22 +321,22 @@ impl<'p> Painter<'p> {
         config: &config::Config,
     ) -> (Option<BgFillMethod>, Style) {
         let fill_style = match state {
-            State::HunkMinus(None) | State::HunkMinusWrapped => {
+            State::HunkMinus(_, None) | State::HunkMinusWrapped => {
                 if let Some(true) = line_has_homolog {
                     config.minus_non_emph_style
                 } else {
                     config.minus_style
                 }
             }
-            State::HunkZero | State::HunkZeroWrapped => config.zero_style,
-            State::HunkPlus(None) | State::HunkPlusWrapped => {
+            State::HunkZero(_) | State::HunkZeroWrapped => config.zero_style,
+            State::HunkPlus(_, None) | State::HunkPlusWrapped => {
                 if let Some(true) = line_has_homolog {
                     config.plus_non_emph_style
                 } else {
                     config.plus_style
                 }
             }
-            State::HunkMinus(Some(_)) | State::HunkPlus(Some(_)) => {
+            State::HunkMinus(_, Some(_)) | State::HunkPlus(_, Some(_)) => {
                 // Consider the following raw line, from git colorMoved:
                 // ␛[1;36m+␛[m␛[1;36mclass·X:·pass␛[m␊ The last style section returned by
                 // parse_style_sections will be a default style associated with the terminal newline
@@ -480,7 +402,7 @@ impl<'p> Painter<'p> {
         state: &State,
         line_numbers_data: &mut Option<&mut line_numbers::LineNumbersData>,
         side_by_side_panel: Option<PanelSide>,
-        painted_prefix: Option<ansi_term::ANSIString>,
+        mut painted_prefix: Option<ansi_term::ANSIString>,
         config: &config::Config,
     ) -> (String, bool) {
         let mut ansi_strings = Vec::new();
@@ -517,8 +439,8 @@ impl<'p> Painter<'p> {
         for (section_style, text) in &superimposed {
             // If requested re-insert the +/- prefix with proper styling.
             if !handled_prefix {
-                if let Some(ref painted_prefix) = painted_prefix {
-                    ansi_strings.push(painted_prefix.clone());
+                if let Some(painted_prefix) = painted_prefix.take() {
+                    ansi_strings.push(painted_prefix)
                 }
             }
 
@@ -545,19 +467,19 @@ impl<'p> Painter<'p> {
             return false;
         }
         match state {
-            State::HunkMinus(None) => {
+            State::HunkMinus(_, None) => {
                 config.minus_style.is_syntax_highlighted
                     || config.minus_emph_style.is_syntax_highlighted
                     || config.minus_non_emph_style.is_syntax_highlighted
             }
-            State::HunkZero => config.zero_style.is_syntax_highlighted,
-            State::HunkPlus(None) => {
+            State::HunkZero(_) => config.zero_style.is_syntax_highlighted,
+            State::HunkPlus(_, None) => {
                 config.plus_style.is_syntax_highlighted
                     || config.plus_emph_style.is_syntax_highlighted
                     || config.plus_non_emph_style.is_syntax_highlighted
             }
-            State::HunkHeader(_, _) => true,
-            State::HunkMinus(Some(_raw_line)) | State::HunkPlus(Some(_raw_line)) => {
+            State::HunkHeader(_, _, _, _) => true,
+            State::HunkMinus(_, Some(_raw_line)) | State::HunkPlus(_, Some(_raw_line)) => {
                 // It is possible that the captured raw line contains an ANSI
                 // style that has been mapped (via map-styles) to a delta Style
                 // with syntax-highlighting.
@@ -568,10 +490,11 @@ impl<'p> Painter<'p> {
             State::Grep => true,
             State::Unknown
             | State::CommitMeta
-            | State::DiffHeader
+            | State::DiffHeader(_)
             | State::HunkMinusWrapped
             | State::HunkZeroWrapped
             | State::HunkPlusWrapped
+            | State::MergeConflict(_, _)
             | State::SubmoduleLog
             | State::SubmoduleShort(_) => {
                 panic!(
@@ -580,68 +503,6 @@ impl<'p> Painter<'p> {
                 )
             }
         }
-    }
-
-    pub fn get_syntax_style_sections_for_lines<'a>(
-        lines: &'a [(String, State)],
-        highlighter: Option<&mut HighlightLines>,
-        config: &config::Config,
-    ) -> Vec<LineSections<'a, SyntectStyle>> {
-        let mut line_sections = Vec::new();
-        match (
-            highlighter,
-            lines
-                .iter()
-                .any(|(_, state)| Painter::should_compute_syntax_highlighting(state, config)),
-        ) {
-            (Some(highlighter), true) => {
-                for (line, _) in lines.iter() {
-                    line_sections.push(highlighter.highlight(line, &config.syntax_set));
-                }
-            }
-            _ => {
-                for (line, _) in lines.iter() {
-                    line_sections.push(vec![(config.null_syntect_style, line.as_str())])
-                }
-            }
-        }
-        line_sections
-    }
-
-    /// Get background styles to represent diff for minus and plus lines in buffer.
-    #[allow(clippy::type_complexity)]
-    fn get_diff_style_sections<'a>(
-        lines: &MinusPlus<&'a Vec<(String, State)>>,
-        config: &config::Config,
-    ) -> (
-        MinusPlus<Vec<LineSections<'a, Style>>>,
-        Vec<(Option<usize>, Option<usize>)>,
-    ) {
-        let (minus_lines, minus_styles): (Vec<&str>, Vec<Style>) = lines[Minus]
-            .iter()
-            .map(|(s, state)| (s.as_str(), *config.get_style(state)))
-            .unzip();
-        let (plus_lines, plus_styles): (Vec<&str>, Vec<Style>) = lines[Plus]
-            .iter()
-            .map(|(s, state)| (s.as_str(), *config.get_style(state)))
-            .unzip();
-        let (minus_line_diff_style_sections, plus_line_diff_style_sections, line_alignment) =
-            edits::infer_edits(
-                minus_lines,
-                plus_lines,
-                minus_styles,
-                config.minus_emph_style, // FIXME
-                plus_styles,
-                config.plus_emph_style, // FIXME
-                &config.tokenization_regex,
-                config.max_line_distance,
-                config.max_line_distance_for_naively_paired_lines,
-            );
-        let diff_sections = MinusPlus::new(
-            minus_line_diff_style_sections,
-            plus_line_diff_style_sections,
-        );
-        (diff_sections, line_alignment)
     }
 
     /// There are some rules according to which we update line section styles that were computed
@@ -701,7 +562,8 @@ impl<'p> Painter<'p> {
             .zip_eq(lines_style_sections)
             .zip_eq(lines_have_homolog)
         {
-            if let State::HunkMinus(Some(raw_line)) | State::HunkPlus(Some(raw_line)) = state {
+            if let State::HunkMinus(_, Some(raw_line)) | State::HunkPlus(_, Some(raw_line)) = state
+            {
                 // raw_line is captured in handle_hunk_line under certain conditions. If we have
                 // done so, then overwrite the style sections with styles parsed directly from the
                 // raw line. Currently the only reason this is done is to handle a diff.colorMoved
@@ -730,6 +592,155 @@ impl<'p> Painter<'p> {
                 }
             }
         }
+    }
+}
+
+pub fn paint_minus_and_plus_lines(
+    lines: MinusPlus<&Vec<(String, State)>>,
+    line_numbers_data: &mut Option<LineNumbersData>,
+    highlighter: &mut Option<HighlightLines>,
+    output_buffer: &mut String,
+    config: &config::Config,
+) {
+    let syntax_style_sections = MinusPlus::new(
+        get_syntax_style_sections_for_lines(lines[Minus], highlighter.as_mut(), config),
+        get_syntax_style_sections_for_lines(lines[Plus], highlighter.as_mut(), config),
+    );
+    let (mut diff_style_sections, line_alignment) = get_diff_style_sections(&lines, config);
+    let lines_have_homolog = edits::make_lines_have_homolog(&line_alignment);
+    Painter::update_diff_style_sections(
+        &lines,
+        &mut diff_style_sections,
+        &lines_have_homolog,
+        config,
+    );
+    if config.side_by_side {
+        side_by_side::paint_minus_and_plus_lines_side_by_side(
+            lines,
+            syntax_style_sections,
+            diff_style_sections,
+            lines_have_homolog,
+            line_alignment,
+            line_numbers_data,
+            output_buffer,
+            config,
+        )
+    } else {
+        // Unified diff mode:
+        if !lines[Minus].is_empty() {
+            Painter::paint_lines(
+                lines[Minus],
+                &syntax_style_sections[Minus],
+                &diff_style_sections[Minus],
+                &lines_have_homolog[Minus],
+                output_buffer,
+                config,
+                &mut line_numbers_data.as_mut(),
+                Some(config.minus_empty_line_marker_style),
+                BgShouldFill::default(),
+            );
+        }
+        if !lines[Plus].is_empty() {
+            Painter::paint_lines(
+                lines[Plus],
+                &syntax_style_sections[Plus],
+                &diff_style_sections[Plus],
+                &lines_have_homolog[Plus],
+                output_buffer,
+                config,
+                &mut line_numbers_data.as_mut(),
+                Some(config.plus_empty_line_marker_style),
+                BgShouldFill::default(),
+            );
+        }
+    }
+}
+
+pub fn get_syntax_style_sections_for_lines<'a>(
+    lines: &'a [(String, State)],
+    highlighter: Option<&mut HighlightLines>,
+    config: &config::Config,
+) -> Vec<LineSections<'a, SyntectStyle>> {
+    let mut line_sections = Vec::new();
+    match (
+        highlighter,
+        lines
+            .iter()
+            .any(|(_, state)| Painter::should_compute_syntax_highlighting(state, config)),
+    ) {
+        (Some(highlighter), true) => {
+            for (line, _) in lines.iter() {
+                line_sections.push(highlighter.highlight(line, &config.syntax_set));
+            }
+        }
+        _ => {
+            for (line, _) in lines.iter() {
+                line_sections.push(vec![(config.null_syntect_style, line.as_str())])
+            }
+        }
+    }
+    line_sections
+}
+
+/// Get background styles to represent diff for minus and plus lines in buffer.
+#[allow(clippy::type_complexity)]
+fn get_diff_style_sections<'a>(
+    lines: &MinusPlus<&'a Vec<(String, State)>>,
+    config: &config::Config,
+) -> (
+    MinusPlus<Vec<LineSections<'a, Style>>>,
+    Vec<(Option<usize>, Option<usize>)>,
+) {
+    let (minus_lines, minus_styles): (Vec<&str>, Vec<Style>) = lines[Minus]
+        .iter()
+        .map(|(s, state)| (s.as_str(), *config.get_style(state)))
+        .unzip();
+    let (plus_lines, plus_styles): (Vec<&str>, Vec<Style>) = lines[Plus]
+        .iter()
+        .map(|(s, state)| (s.as_str(), *config.get_style(state)))
+        .unzip();
+    let (minus_line_diff_style_sections, plus_line_diff_style_sections, line_alignment) =
+        edits::infer_edits(
+            minus_lines,
+            plus_lines,
+            minus_styles,
+            config.minus_emph_style, // FIXME
+            plus_styles,
+            config.plus_emph_style, // FIXME
+            &config.tokenization_regex,
+            config.max_line_distance,
+            config.max_line_distance_for_naively_paired_lines,
+        );
+    let diff_sections = MinusPlus::new(
+        minus_line_diff_style_sections,
+        plus_line_diff_style_sections,
+    );
+    (diff_sections, line_alignment)
+}
+
+fn painted_prefix(state: State, config: &config::Config) -> Option<ANSIString> {
+    use DiffType::*;
+    use State::*;
+    match (state, config.keep_plus_minus_markers) {
+        // For a combined diff, unless we are in a merge conflict, we do not honor
+        // keep_plus_minus_markers -- i.e. we always emit the prefix -- because there is currently
+        // no way to distinguish, say, a '+ ' line from a ' +' line, by styles alone. In a merge
+        // conflict we do honor the setting because the way merge conflicts are displayed indicates
+        // from which commit the lines derive.
+        (HunkMinus(Combined(MergeParents::Prefix(prefix), InMergeConflict::No), _), _) => {
+            Some(config.minus_style.paint(prefix))
+        }
+        (HunkZero(Combined(MergeParents::Prefix(prefix), InMergeConflict::No)), _) => {
+            Some(config.zero_style.paint(prefix))
+        }
+        (HunkPlus(Combined(MergeParents::Prefix(prefix), InMergeConflict::No), _), _) => {
+            Some(config.plus_style.paint(prefix))
+        }
+        // But otherwise we honor keep_plus_minus_markers
+        (HunkMinus(_, _), true) => Some(config.minus_style.paint("-".to_string())),
+        (HunkZero(_), true) => Some(config.zero_style.paint(" ".to_string())),
+        (HunkPlus(_, _), true) => Some(config.plus_style.paint("+".to_string())),
+        _ => None,
     }
 }
 

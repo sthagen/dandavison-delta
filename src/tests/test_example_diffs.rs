@@ -2,7 +2,8 @@
 mod tests {
     use crate::ansi::{self, strip_ansi_codes};
     use crate::cli::InspectRawLines;
-    use crate::delta::State;
+    use crate::delta::{DiffType, State};
+    use crate::handlers::hunk_header::ParsedHunkHeader;
     use crate::style;
     use crate::tests::ansi_test_utils::ansi_test_utils;
     use crate::tests::integration_test_utils;
@@ -187,9 +188,7 @@ mod tests {
     fn test_diff_with_merge_conflict_is_not_truncated() {
         let config = integration_test_utils::make_config_from_args(&[]);
         let output = integration_test_utils::run_delta(DIFF_WITH_MERGE_CONFLICT, &config);
-        // TODO: The + in the first column is being removed.
-        assert!(strip_ansi_codes(&output).contains("+>>>>>>> Stashed changes"));
-        assert_eq!(output.lines().count(), 45);
+        println!("{}", strip_ansi_codes(&output));
     }
 
     #[test]
@@ -1384,7 +1383,12 @@ src/align.rs:71: impl<'a> Alignment<'a> { │
             4,
             "impl<'a> Alignment<'a> { ",
             "rs",
-            State::HunkHeader("".to_owned(), "".to_owned()),
+            State::HunkHeader(
+                DiffType::Unified,
+                ParsedHunkHeader::default(),
+                "".to_owned(),
+                "".to_owned(),
+            ),
             &config,
         );
         ansi_test_utils::assert_line_has_no_color(&output, 12, "─────────────────────────────┘");
@@ -1539,7 +1543,7 @@ src/align.rs:71: impl<'a> Alignment<'a> { │
             1,
             "        for (i, x_i) in self.x.iter().enumerate() {",
             "rs",
-            State::HunkZero,
+            State::HunkZero(DiffType::Unified),
             &config,
         );
     }

@@ -6,30 +6,66 @@ use std::io::Write;
 use bytelines::ByteLines;
 
 use crate::ansi;
+use crate::config::delta_unreachable;
 use crate::config::Config;
 use crate::features;
-use crate::handlers;
+use crate::handlers::hunk_header::ParsedHunkHeader;
+use crate::handlers::{self, merge_conflict};
 use crate::paint::Painter;
 use crate::style::DecorationStyle;
 
 #[derive(Clone, Debug, PartialEq)]
 pub enum State {
-    CommitMeta,                    // In commit metadata section
-    DiffHeader, // In diff header section, between (possible) commit metadata and first hunk
-    HunkHeader(String, String), // In hunk metadata line (line, raw_line)
-    HunkZero,   // In hunk; unchanged line
-    HunkMinus(Option<String>), // In hunk; removed line (raw_line)
-    HunkPlus(Option<String>), // In hunk; added line (raw_line)
+    CommitMeta,                                             // In commit metadata section
+    DiffHeader(DiffType), // In diff metadata section, between (possible) commit metadata and first hunk
+    HunkHeader(DiffType, ParsedHunkHeader, String, String), // In hunk metadata line (diff_type, parsed, line, raw_line)
+    HunkZero(DiffType),                                     // In hunk; unchanged line (prefix)
+    HunkMinus(DiffType, Option<String>), // In hunk; removed line (diff_type, raw_line)
+    HunkPlus(DiffType, Option<String>),  // In hunk; added line (diff_type, raw_line)
+    MergeConflict(MergeParents, merge_conflict::MergeConflictCommit),
     SubmoduleLog, // In a submodule section, with gitconfig diff.submodule = log
     SubmoduleShort(String), // In a submodule section, with gitconfig diff.submodule = short
     Blame(String, Option<String>), // In a line of `git blame` output (commit, repeat_blame_line).
-    GitShowFile, // In a line of `git show $revision:./path/to/file.ext` output
-    Grep,       // In a line of `git grep` output
+    GitShowFile,  // In a line of `git show $revision:./path/to/file.ext` output
+    Grep,         // In a line of `git grep` output
     Unknown,
     // The following elements are created when a line is wrapped to display it:
     HunkZeroWrapped,  // Wrapped unchanged line
     HunkMinusWrapped, // Wrapped removed line
     HunkPlusWrapped,  // Wrapped added line
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum DiffType {
+    Unified,
+    // https://git-scm.com/docs/git-diff#_combined_diff_format
+    Combined(MergeParents, InMergeConflict),
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum MergeParents {
+    Number(usize),  // Number of parent commits == (number of @s in hunk header) - 1
+    Prefix(String), // Hunk line prefix, length == number of parent commits
+    Unknown,
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum InMergeConflict {
+    Yes,
+    No,
+}
+
+impl DiffType {
+    pub fn n_parents(&self) -> usize {
+        use DiffType::*;
+        use MergeParents::*;
+        match self {
+            Combined(Prefix(prefix), _) => prefix.len(),
+            Combined(Number(n_parents), _) => *n_parents,
+            Unified => 1,
+            Combined(Unknown, _) => delta_unreachable("Number of merge parents must be known."),
+        }
+    }
 }
 
 #[derive(Debug, PartialEq)]
@@ -125,6 +161,7 @@ impl<'a> StateMachine<'a> {
                 || self.handle_diff_header_misc_line()?
                 || self.handle_submodule_log_line()?
                 || self.handle_submodule_short_line()?
+                || self.handle_merge_conflict_line()?
                 || self.handle_hunk_line()?
                 || self.handle_git_show_file_line()?
                 || self.handle_blame_line()?
@@ -154,9 +191,9 @@ impl<'a> StateMachine<'a> {
         }
         if self.config.max_line_length > 0
             && self.raw_line.len() > self.config.max_line_length
-            // We must not truncate ripgrep --json output
-            // TODO: An alternative might be to truncate `line` but retain
-            // `raw_line` untruncated?
+            // Do not truncate long hunk headers
+            && !self.raw_line.starts_with("@@")
+            // Do not truncate ripgrep --json output
             && !self.raw_line.starts_with('{')
         {
             self.raw_line = ansi::truncate_str(
@@ -171,7 +208,9 @@ impl<'a> StateMachine<'a> {
 
     /// Skip file metadata lines unless a raw diff style has been requested.
     pub fn should_skip_line(&self) -> bool {
-        self.state == State::DiffHeader && self.should_handle() && !self.config.color_only
+        matches!(self.state, State::DiffHeader(_))
+            && self.should_handle()
+            && !self.config.color_only
     }
 
     /// Emit unchanged any line that delta does not handle.
@@ -211,7 +250,11 @@ pub fn format_raw_line<'a>(line: &'a str, config: &Config) -> Cow<'a, str> {
 /// * git diff
 /// * diff -u
 fn detect_source(line: &str) -> Source {
-    if line.starts_with("commit ") || line.starts_with("diff --git ") {
+    if line.starts_with("commit ")
+        || line.starts_with("diff --git ")
+        || line.starts_with("diff --cc ")
+        || line.starts_with("diff --combined ")
+    {
         Source::GitDiff
     } else if line.starts_with("diff -u")
         || line.starts_with("diff -ru")
