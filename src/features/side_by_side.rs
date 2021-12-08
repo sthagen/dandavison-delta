@@ -174,41 +174,52 @@ pub fn paint_minus_and_plus_lines_side_by_side(
     };
 
     for (minus_line_index, plus_line_index) in line_alignment {
+        let left_state = match minus_line_index {
+            Some(i) => &line_states[Left][i],
+            None => &State::HunkMinus(DiffType::Unified, None),
+        };
         output_buffer.push_str(&paint_left_panel_minus_line(
             minus_line_index,
             &syntax_sections[Left],
             &diff_sections[Left],
             &lines_have_homolog[Left],
-            match minus_line_index {
-                Some(i) => &line_states[Left][i],
-                None => &State::HunkMinus(DiffType::Unified, None),
-            },
+            left_state,
             &mut Some(line_numbers_data),
             bg_should_fill[Left],
             config,
         ));
 
-        // HACK: The left line number is not getting incremented in `linenumbers_and_styles()`
-        // when the alignment matches a minus with a plus line, so fix that here.
-        // This information should be passed down into `paint_line()` to set `increment` to true.
-        if minus_line_index.is_some() && plus_line_index.is_some() {
-            line_numbers_data.line_number[Left] += 1;
-        }
-
+        let right_state = match plus_line_index {
+            Some(i) => &line_states[Right][i],
+            None => &State::HunkPlus(DiffType::Unified, None),
+        };
         output_buffer.push_str(&paint_right_panel_plus_line(
             plus_line_index,
             &syntax_sections[Right],
             &diff_sections[Right],
             &lines_have_homolog[Right],
-            match plus_line_index {
-                Some(i) => &line_states[Right][i],
-                None => &State::HunkPlus(DiffType::Unified, None),
-            },
+            right_state,
             &mut Some(line_numbers_data),
             bg_should_fill[Right],
             config,
         ));
         output_buffer.push('\n');
+
+        // HACK: The left line number is not getting incremented in `linenumbers_and_styles()`
+        // when the alignment matches a minus with a plus line, so fix that here and take
+        // wrapped lines into account.
+        // Similarly an increment happens when it should not, so undo that.
+        // TODO: Pass this information down into `paint_line()` to set `increment` accordingly.
+        match (left_state, right_state, minus_line_index, plus_line_index) {
+            (State::HunkMinusWrapped, State::HunkPlus(_, _), Some(_), None) => {
+                line_numbers_data.line_number[Left] =
+                    line_numbers_data.line_number[Left].saturating_sub(1)
+            }
+            // Duplicating the logic from `linenumbers_and_styles()` a bit:
+            (State::HunkMinusWrapped | State::HunkPlusWrapped, _, _, _) => {}
+            (_, _, Some(_), Some(_)) => line_numbers_data.line_number[Left] += 1,
+            _ => {}
+        }
     }
 }
 
@@ -582,50 +593,79 @@ pub mod ansifill {
 pub mod tests {
     use crate::ansi::strip_ansi_codes;
     use crate::features::line_numbers::tests::*;
-    use crate::tests::integration_test_utils::{make_config_from_args, run_delta};
+    use crate::tests::integration_test_utils::{make_config_from_args, run_delta, DeltaTest};
 
     #[test]
     fn test_two_minus_lines() {
-        let config = make_config_from_args(&["--side-by-side", "--width", "40"]);
-        let output = run_delta(TWO_MINUS_LINES_DIFF, &config);
-        let mut lines = output.lines().skip(crate::config::HEADER_LEN);
-        let (line_1, line_2) = (lines.next().unwrap(), lines.next().unwrap());
-        assert_eq!("│ 1  │a = 1         │    │", strip_ansi_codes(line_1));
-        assert_eq!("│ 2  │b = 23456     │    │", strip_ansi_codes(line_2));
+        DeltaTest::with(&["--side-by-side", "--width", "40"])
+            .with_input(TWO_MINUS_LINES_DIFF)
+            .expect(
+                r#"
+                │ 1  │a = 1         │    │
+                │ 2  │b = 23456     │    │"#,
+            );
     }
 
     #[test]
     fn test_two_minus_lines_truncated() {
-        let mut config = make_config_from_args(&[
+        DeltaTest::with(&[
             "--side-by-side",
             "--wrap-max-lines",
             "0",
             "--width",
             "28",
             "--line-fill-method=spaces",
-        ]);
-        config.truncation_symbol = ">".into();
-        let output = run_delta(TWO_MINUS_LINES_DIFF, &config);
-        let mut lines = output.lines().skip(crate::config::HEADER_LEN);
-        let (line_1, line_2) = (lines.next().unwrap(), lines.next().unwrap());
-        assert_eq!("│ 1  │a = 1   │    │", strip_ansi_codes(line_1));
-        assert_eq!("│ 2  │b = 234>│    │", strip_ansi_codes(line_2));
+        ])
+        .set_cfg(|cfg| cfg.truncation_symbol = ">".into())
+        .with_input(TWO_MINUS_LINES_DIFF)
+        .expect(
+            r#"
+            │ 1  │a = 1   │    │
+            │ 2  │b = 234>│    │"#,
+        );
     }
 
     #[test]
     fn test_two_plus_lines() {
-        let config = make_config_from_args(&[
+        DeltaTest::with(&[
             "--side-by-side",
             "--width",
             "41",
             "--line-fill-method=spaces",
-        ]);
-        let output = run_delta(TWO_PLUS_LINES_DIFF, &config);
-        let mut lines = output.lines().skip(crate::config::HEADER_LEN);
-        let (line_1, line_2) = (lines.next().unwrap(), lines.next().unwrap());
-        let sac = strip_ansi_codes; // alias to help with `cargo fmt`-ing:
-        assert_eq!("│    │              │ 1  │a = 1         ", sac(line_1));
-        assert_eq!("│    │              │ 2  │b = 234567    ", sac(line_2));
+        ])
+        .with_input(TWO_PLUS_LINES_DIFF)
+        .expect(
+            r#"
+            │    │              │ 1  │a = 1         
+            │    │              │ 2  │b = 234567    "#,
+        );
+    }
+
+    #[test]
+    fn test_two_plus_lines_spaces_and_ansi() {
+        DeltaTest::with(&[
+            "--side-by-side",
+            "--width",
+            "41",
+            "--line-fill-method=spaces",
+        ])
+        .with_input(TWO_PLUS_LINES_DIFF)
+        .explain_ansi()
+        .expect(r#"
+        (blue)│(88)    (blue)│(normal)              (blue)│(28) 1  (blue)│(231 22)a (203)=(231) (141)1(normal 22)         (normal)
+        (blue)│(88)    (blue)│(normal)              (blue)│(28) 2  (blue)│(231 22)b (203)=(231) (141)234567(normal 22)    (normal)"#);
+
+        DeltaTest::with(&[
+            "--side-by-side",
+            "--width",
+            "41",
+            "--line-fill-method=ansi",
+        ])
+        .with_input(TWO_PLUS_LINES_DIFF)
+        .explain_ansi()
+        .expect(r#"
+        (blue)│(88)    (blue)│(normal)              (blue) │(28) 1  (blue)│(231 22)a (203)=(231) (141)1(normal)
+        (blue)│(88)    (blue)│(normal)              (blue) │(28) 2  (blue)│(231 22)b (203)=(231) (141)234567(normal)"#);
     }
 
     #[test]
@@ -661,17 +701,17 @@ pub mod tests {
 
     #[test]
     fn test_one_minus_one_plus_line() {
-        let config = make_config_from_args(&[
+        DeltaTest::with(&[
             "--side-by-side",
             "--width",
             "40",
             "--line-fill-method=spaces",
-        ]);
-        let output = run_delta(ONE_MINUS_ONE_PLUS_LINE_DIFF, &config);
-        let output = strip_ansi_codes(&output);
-        let mut lines = output.lines().skip(crate::config::HEADER_LEN);
-        let mut lnu = move || lines.next().unwrap(); // for cargo fmt
-        assert_eq!("│ 1  │a = 1         │ 1  │a = 1", lnu());
-        assert_eq!("│ 2  │b = 2         │ 2  │bb = 2        ", lnu());
+        ])
+        .with_input(ONE_MINUS_ONE_PLUS_LINE_DIFF)
+        .expect(
+            r#"
+            │ 1  │a = 1         │ 1  │a = 1
+            │ 2  │b = 2         │ 2  │bb = 2        "#,
+        );
     }
 }

@@ -322,7 +322,7 @@ pub mod tests {
     use crate::ansi::strip_ansi_codes;
     use crate::features::side_by_side::ansifill::ODD_PAD_CHAR;
     use crate::format::FormatStringData;
-    use crate::tests::integration_test_utils::{make_config_from_args, run_delta};
+    use crate::tests::integration_test_utils::{make_config_from_args, run_delta, DeltaTest};
 
     use super::*;
 
@@ -630,7 +630,7 @@ pub mod tests {
 
     #[test]
     fn test_two_minus_lines() {
-        let config = make_config_from_args(&[
+        DeltaTest::with(&[
             "--line-numbers",
             "--line-numbers-left-format",
             "{nm:^4}⋮",
@@ -644,17 +644,19 @@ pub mod tests {
             "0 3",
             "--line-numbers-plus-style",
             "0 4",
-        ]);
-        let output = run_delta(TWO_MINUS_LINES_DIFF, &config);
-        let mut lines = output.lines().skip(crate::config::HEADER_LEN);
-        let (line_1, line_2) = (lines.next().unwrap(), lines.next().unwrap());
-        assert_eq!(strip_ansi_codes(line_1), " 1  ⋮    │a = 1");
-        assert_eq!(strip_ansi_codes(line_2), " 2  ⋮    │b = 23456");
+        ])
+        .with_input(TWO_MINUS_LINES_DIFF)
+        .expect(
+            r#"
+             #indent_mark
+              1  ⋮    │a = 1
+              2  ⋮    │b = 23456"#,
+        );
     }
 
     #[test]
     fn test_two_plus_lines() {
-        let config = make_config_from_args(&[
+        DeltaTest::with(&[
             "--line-numbers",
             "--line-numbers-left-format",
             "{nm:^4}⋮",
@@ -668,12 +670,14 @@ pub mod tests {
             "0 3",
             "--line-numbers-plus-style",
             "0 4",
-        ]);
-        let output = run_delta(TWO_PLUS_LINES_DIFF, &config);
-        let mut lines = output.lines().skip(crate::config::HEADER_LEN);
-        let (line_1, line_2) = (lines.next().unwrap(), lines.next().unwrap());
-        assert_eq!(strip_ansi_codes(line_1), "    ⋮ 1  │a = 1");
-        assert_eq!(strip_ansi_codes(line_2), "    ⋮ 2  │b = 234567");
+        ])
+        .with_input(TWO_PLUS_LINES_DIFF)
+        .expect(
+            r#"
+             #indent_mark
+                 ⋮ 1  │a = 1
+                 ⋮ 2  │b = 234567"#,
+        );
     }
 
     #[test]
@@ -775,21 +779,90 @@ pub mod tests {
 
     #[test]
     fn test_line_numbers_continue_correctly() {
-        let config = make_config_from_args(&[
+        DeltaTest::with(&["--side-by-side", "--width", "44", "--line-fill-method=ansi"])
+            .with_input(DIFF_PLUS_MINUS_WITH_1_CONTEXT_DIFF)
+            .expect(
+                r#"
+                │ 1  │abc             │ 1  │abc
+                │ 2  │a = left side   │ 2  │a = right side
+                │ 3  │xyz             │ 3  │xyz"#,
+            );
+    }
+
+    #[test]
+    fn test_line_numbers_continue_correctly_after_wrapping() {
+        DeltaTest::with(&[
             "--side-by-side",
             "--width",
-            "40",
-            "--line-fill-method=spaces",
-        ]);
+            "32",
+            "--line-fill-method=ansi",
+            "--wrap-left-symbol",
+            "@",
+            "--wrap-right-symbol",
+            "@",
+        ])
+        .with_input(DIFF_PLUS_MINUS_WITH_1_CONTEXT_DIFF)
+        .expect(
+            r#"
+            │ 1  │abc       │ 1  │abc
+            │ 2  │a = left @│ 2  │a = right@
+            │    │side      │    │ side
+            │ 3  │xyz       │ 3  │xyz"#,
+        );
 
-        let output = run_delta(HUNK_PLUS_MINUS_WITH_1_CONTEXT_DIFF, &config);
-        let mut lines = output.lines().skip(crate::config::HEADER_LEN);
+        let cfg = &[
+            "--side-by-side",
+            "--width",
+            "42",
+            "--line-fill-method=ansi",
+            "--wrap-left-symbol",
+            "@",
+            "--wrap-right-symbol",
+            "@",
+        ];
 
-        // closure to help with `cargo fmt`-ing:
-        let mut next_line = || strip_ansi_codes(lines.next().unwrap());
-        assert_eq!("│ 1  │same          │ 1  │same", next_line());
-        assert_eq!("│ 2  │a = left      │ 2  │a = right     ", next_line());
-        assert_eq!("│ 3  │also same     │ 3  │also same", next_line());
+        DeltaTest::with(cfg)
+            .with_input(DIFF_WITH_LONGER_MINUS_1_CONTEXT)
+            .expect(
+                r#"
+                │ 1  │abc            │ 1  │abc
+                │ 2  │a = one side   │ 2  │a = one longer@
+                │    │               │    │ side
+                │ 3  │xyz            │ 3  │xyz"#,
+            );
+
+        DeltaTest::with(cfg)
+            .with_input(DIFF_WITH_LONGER_PLUS_1_CONTEXT)
+            .expect(
+                r#"
+                │ 1  │abc            │ 1  │abc
+                │ 2  │a = one longer@│ 2  │a = one side
+                │    │ side          │    │
+                │ 3  │xyz            │ 3  │xyz"#,
+            );
+
+        DeltaTest::with(cfg)
+            .with_input(DIFF_MISMATCH_LONGER_MINUS_1_CONTEXT)
+            .expect(
+                r#"
+                │ 1  │abc            │ 1  │abc
+                │ 2  │a = left side @│    │
+                │    │which is longer│    │
+                │    │               │ 2  │a = other one
+                │ 3  │xyz            │ 3  │xyz"#,
+            );
+
+        DeltaTest::with(cfg)
+            .with_input(DIFF_MISMATCH_LONGER_PLUS_1_CONTEXT)
+            .expect(
+                r#"
+                │ 1  │abc            │ 1  │abc
+                │ 2  │a = other one  │    │
+                │    │               │ 2  │a = right side@
+                │    │               │    │ which is long@
+                │    │               │    │er
+                │ 3  │xyz            │ 3  │xyz"#,
+            );
     }
 
     pub const TWO_MINUS_LINES_DIFF: &str = "\
@@ -861,12 +934,48 @@ index 223ca50..367a6f6 100644
 +bb = 2
 ";
 
-    const HUNK_PLUS_MINUS_WITH_1_CONTEXT_DIFF: &str = "\
+    const DIFF_PLUS_MINUS_WITH_1_CONTEXT_DIFF: &str = "\
 --- a/a.py
 +++ b/b.py
 @@ -1,3 +1,3 @@
- same
--a = left
-+a = right
- also same";
+ abc
+-a = left side
++a = right side
+ xyz";
+
+    const DIFF_WITH_LONGER_MINUS_1_CONTEXT: &str = "\
+--- a/a.py
++++ b/b.py
+@@ -1,3 +1,3 @@
+ abc
+-a = one side
++a = one longer side
+ xyz";
+
+    const DIFF_WITH_LONGER_PLUS_1_CONTEXT: &str = "\
+--- a/a.py
++++ b/b.py
+@@ -1,3 +1,3 @@
+ abc
+-a = one longer side
++a = one side
+ xyz";
+
+    const DIFF_MISMATCH_LONGER_MINUS_1_CONTEXT: &str = "\
+--- a/a.py
++++ b/b.py
+@@ -1,3 +1,3 @@
+ abc
+-a = left side which is longer
++a = other one
+ xyz";
+
+    const DIFF_MISMATCH_LONGER_PLUS_1_CONTEXT: &str = "\
+--- a/a.py
++++ b/b.py
+@@ -1,3 +1,3 @@
+ abc
+-a = other one
++a = right side which is longer
+ xyz";
 }
