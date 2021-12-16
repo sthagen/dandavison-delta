@@ -8,7 +8,7 @@ use crate::cli;
 use crate::config::{self, delta_unreachable};
 use crate::delta::{DiffType, InMergeConflict, MergeParents, State, StateMachine};
 use crate::minusplus::MinusPlus;
-use crate::paint;
+use crate::paint::{self, prepare};
 use crate::style::Style;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -42,7 +42,7 @@ impl<'a> StateMachine<'a> {
         match self.state.clone() {
             HunkHeader(Combined(merge_parents, InMergeConflict::No), _, _, _)
             | HunkMinus(Combined(merge_parents, InMergeConflict::No), _)
-            | HunkZero(Combined(merge_parents, InMergeConflict::No))
+            | HunkZero(Combined(merge_parents, InMergeConflict::No), _)
             | HunkPlus(Combined(merge_parents, InMergeConflict::No), _) => {
                 handled_line = self.enter_merge_conflict(&merge_parents)
             }
@@ -120,8 +120,8 @@ impl<'a> StateMachine<'a> {
 
     fn store_line(&mut self, commit: MergeConflictCommit, state: State) -> bool {
         use State::*;
-        if let HunkMinus(diff_type, _) | HunkZero(diff_type) | HunkPlus(diff_type, _) = &state {
-            let line = self.painter.prepare(&self.line, diff_type.n_parents());
+        if let HunkMinus(diff_type, _) | HunkZero(diff_type, _) | HunkPlus(diff_type, _) = &state {
+            let line = prepare(&self.line, diff_type.n_parents(), self.config);
             self.painter.merge_conflict_lines[commit].push((line, state));
             true
         } else {
@@ -172,7 +172,7 @@ impl<'a> StateMachine<'a> {
             self.config,
         )?;
         self.painter.merge_conflict_lines.clear();
-        self.state = HunkZero(Combined(merge_parents.clone(), InMergeConflict::No));
+        self.state = HunkZero(Combined(merge_parents.clone(), InMergeConflict::No), None);
         Ok(())
     }
 }
@@ -212,13 +212,15 @@ fn write_merge_conflict_bar(
     painter: &mut paint::Painter,
     config: &config::Config,
 ) -> std::io::Result<()> {
-    if let cli::Width::Fixed(width) = config.decorations_width {
-        writeln!(
-            painter.writer,
-            "{}",
-            &s.graphemes(true).cycle().take(width).join("")
-        )?;
-    }
+    let width = match config.decorations_width {
+        cli::Width::Fixed(width) => width,
+        cli::Width::Variable => config.available_terminal_width,
+    };
+    writeln!(
+        painter.writer,
+        "{}",
+        &s.graphemes(true).cycle().take(width).join("")
+    )?;
     Ok(())
 }
 

@@ -12,6 +12,7 @@ use crate::cli;
 use crate::config;
 use crate::delta::delta;
 use crate::git_config::GitConfig;
+use crate::utils::process::tests::FakeParentArgs;
 
 pub fn make_options_from_args_and_git_config(
     args: &[&str],
@@ -93,7 +94,7 @@ pub fn get_line_of_code_from_delta(
 //     line1"#;`  // line 2 etc.
 // ignore the first newline and compare the following `lines()` to those produced
 // by `have`, `skip`-ping the first few. The leading spaces of the first line
-// are strippedfrom every following line (and verified) , unless the first line
+// are stripped from every following line (and verified), unless the first line
 // marks the indentation level with `#indent_mark`.
 pub fn lines_match(expected: &str, have: &str, skip: Option<usize>) {
     let mut exp = expected.lines().peekable();
@@ -127,12 +128,14 @@ pub fn lines_match(expected: &str, have: &str, skip: Option<usize>) {
 
 pub struct DeltaTest {
     config: config::Config,
+    calling_process: Option<String>,
 }
 
 impl DeltaTest {
     pub fn with(args: &[&str]) -> Self {
         Self {
             config: make_config_from_args(args),
+            calling_process: None,
         }
     }
 
@@ -144,6 +147,11 @@ impl DeltaTest {
         self
     }
 
+    pub fn with_calling_process(mut self, command: &str) -> Self {
+        self.calling_process = Some(command.to_string());
+        self
+    }
+
     pub fn with_config_and_input(config: &config::Config, input: &str) -> DeltaTestOutput {
         DeltaTestOutput {
             output: run_delta(input, &config),
@@ -152,6 +160,7 @@ impl DeltaTest {
     }
 
     pub fn with_input(&self, input: &str) -> DeltaTestOutput {
+        let _args = FakeParentArgs::for_scope(self.calling_process.as_deref().unwrap_or(""));
         DeltaTest::with_config_and_input(&self.config, input)
     }
 }
@@ -162,12 +171,22 @@ pub struct DeltaTestOutput {
 }
 
 impl DeltaTestOutput {
+    /// Print output, either without ANSI escape sequences or, if explain_ansi() has been called,
+    /// with ASCII explanation of ANSI escape sequences.
+    #[allow(unused)]
     pub fn inspect(self) -> Self {
-        if self.explain_ansi_ {
-            eprintln!("{}", ansi::explain_ansi(&self.output, true));
-        } else {
-            eprintln!("{}", &self.output);
-        }
+        eprintln!("{}", "▼".repeat(100));
+        eprintln!("{}", self.format_output());
+        eprintln!("{}", "▲".repeat(100));
+        self
+    }
+
+    /// Print raw output, with any ANSI escape sequences.
+    #[allow(unused)]
+    pub fn inspect_raw(self) -> Self {
+        eprintln!("{}", "▼".repeat(100));
+        eprintln!("{}", self.output);
+        eprintln!("{}", "▲".repeat(100));
         self
     }
 
@@ -177,19 +196,21 @@ impl DeltaTestOutput {
     }
 
     pub fn expect_skip(self, skip: usize, expected: &str) -> String {
-        let processed = if self.explain_ansi_ {
-            ansi::explain_ansi(&self.output, false)
-        } else {
-            ansi::strip_ansi_codes(&self.output)
-        };
-
+        let processed = self.format_output();
         lines_match(expected, &processed, Some(skip));
-
         processed
     }
 
     pub fn expect(self, expected: &str) -> String {
         self.expect_skip(crate::config::HEADER_LEN, expected)
+    }
+
+    fn format_output(&self) -> String {
+        if self.explain_ansi_ {
+            ansi::explain_ansi(&self.output, false)
+        } else {
+            ansi::strip_ansi_codes(&self.output)
+        }
     }
 }
 
@@ -285,7 +306,6 @@ ignored!  2
             .set_cfg(|c| c.pager = None)
             .set_cfg(|c| c.line_numbers = true)
             .with_input(input)
-            .inspect()
             .expect_skip(
                 0,
                 r#"
@@ -295,20 +315,16 @@ ignored!  2
                      ⋮ 1  │+2"#,
             );
 
-        DeltaTest::with(&[])
-            .with_input(input)
-            .inspect()
-            .expect_skip(
-                4,
-                r#"
+        DeltaTest::with(&[]).with_input(input).expect_skip(
+            4,
+            r#"
                 1
                 2"#,
-            );
+        );
 
         DeltaTest::with(&["--raw"])
             .with_input(input)
             .explain_ansi()
-            .inspect()
             .expect_skip(
                 0,
                 "\n\

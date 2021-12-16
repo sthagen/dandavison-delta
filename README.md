@@ -188,13 +188,13 @@ In addition, delta handles traditional unified diff output.
 ## Installation
 
 You can download an executable for your system:
-[Linux (glibc)](https://github.com/dandavison/delta/releases/download/0.11.1/delta-0.11.1-x86_64-unknown-linux-gnu.tar.gz)
+[Linux (glibc)](https://github.com/dandavison/delta/releases/download/0.11.3/delta-0.11.3-x86_64-unknown-linux-gnu.tar.gz)
 |
-[Linux (musl)](https://github.com/dandavison/delta/releases/download/0.11.1/delta-0.11.1-x86_64-unknown-linux-musl.tar.gz)
+[Linux (musl)](https://github.com/dandavison/delta/releases/download/0.11.3/delta-0.11.3-x86_64-unknown-linux-musl.tar.gz)
 |
-[MacOS](https://github.com/dandavison/delta/releases/download/0.11.1/delta-0.11.1-x86_64-apple-darwin.tar.gz)
+[MacOS](https://github.com/dandavison/delta/releases/download/0.11.3/delta-0.11.3-x86_64-apple-darwin.tar.gz)
 |
-[Windows](https://github.com/dandavison/delta/releases/download/0.11.1/delta-0.11.1-x86_64-pc-windows-msvc.zip)
+[Windows](https://github.com/dandavison/delta/releases/download/0.11.3/delta-0.11.3-x86_64-pc-windows-msvc.zip)
 |
 [All](https://github.com/dandavison/delta/releases)
 
@@ -721,19 +721,20 @@ and use the executable found at `./target/release/delta`.
 
 ### Similar projects
 
+- [banga/git-split-diffs](https://github.com/banga/git-split-diffs)
 - [da-x/fancydiff](https://github.com/da-x/fancydiff)
 - [git/diff-highlight](https://github.com/git/git/tree/master/contrib/diff-highlight)
-- [banga/git-split-diffs](https://github.com/banga/git-split-diffs)
 - [jeffkaufman/icdiff](https://github.com/jeffkaufman/icdiff)
 - [kovidgoyal/kitty-diff](https://sw.kovidgoyal.net/kitty/kittens/diff.html)
 - [mookid/diffr](https://github.com/mookid/diffr)
 - [nkouevda/pdiff](https://github.com/nkouevda/pdiff)
 - [so-fancy/diff-so-fancy](https://github.com/so-fancy/diff-so-fancy)
+- [Wilfred/difftastic](https://github.com/Wilfred/difftastic)
 
 ## Full --help output
 
 ```
-delta 0.11.1
+delta 0.11.3
 A viewer for git and diff output
 
 USAGE:
@@ -799,12 +800,14 @@ FLAGS:
 OPTIONS:
         --features <features>
             Name of delta features to use (space-separated). A feature is a named collection of delta options in
-            ~/.gitconfig. See FEATURES section [env: DELTA_FEATURES=]  [default: ]
+            ~/.gitconfig. See FEATURES section. The environment variable DELTA_FEATURES can be set to a space-separated
+            list of feature names. If this is preceded with a space, the features from the environment variable will be
+            added to those specified in git config. E.g. DELTA_FEATURES=+side-by-side can be used to activate side-by-
+            side temporarily
         --syntax-theme <syntax-theme>
-            The code syntax-highlighting theme to use. Use --show-syntax-themes to demo available themes. If the syntax-
-            highlighting theme is not set using this option, it will be taken from the BAT_THEME environment
-            variable, if that contains a valid theme name. --syntax-theme=none disables all syntax highlighting [env:
-            BAT_THEME=]
+            The code syntax-highlighting theme to use. Use --show-syntax-themes to demo available themes. Defaults to
+            the value of the BAT_THEME environment variable, if that contains a valid theme name. --syntax-theme=none
+            disables all syntax highlighting
         --minus-style <minus-style>
             Style (foreground, background, attributes) for removed lines. See STYLES section [default: normal auto]
         --zero-style <zero-style>
@@ -816,13 +819,13 @@ OPTIONS:
             [default: normal auto]
         --minus-non-emph-style <minus-non-emph-style>
             Style (foreground, background, attributes) for non-emphasized sections of removed lines that have an
-            emphasized section. Defaults to --minus-style. See STYLES section [default: auto auto]
+            emphasized section. See STYLES section [default: minus-style]
         --plus-emph-style <plus-emph-style>
             Style (foreground, background, attributes) for emphasized sections of added lines. See STYLES section
             [default: syntax auto]
         --plus-non-emph-style <plus-non-emph-style>
             Style (foreground, background, attributes) for non-emphasized sections of added lines that have an
-            emphasized section. Defaults to --plus-style. See STYLES section [default: auto auto]
+            emphasized section. See STYLES section [default: plus-style]
         --commit-style <commit-style>
             Style (foreground, background, attributes) for the commit hash line. See STYLES section. The style 'omit'
             can be used to remove the commit hash line from the output [default: raw]
@@ -1007,9 +1010,10 @@ OPTIONS:
             How to extend the background color to the end of the line in side-by-side mode. Can be ansi (default) or
             spaces (default if output is not to a terminal). Has no effect if --width=variable is given
     -w, --width <width>
-            The width of underline/overline decorations. Examples: "72" (exactly 72 characters), Use --width=variable to
-            extend decorations and background colors to the end of the text only. Otherwise background colors extend to
-            the full terminal width
+            The width of underline/overline decorations. Examples: "72" (exactly 72 characters), "-2" (auto-detected
+            terminal width minus 2). An expression such as "74-2" is also valid (equivalent to 72 but may be useful if
+            the caller has a variable holding the value "74"). Use --width=variable to extend decorations and background
+            colors to the end of the text only. Otherwise background colors extend to the full terminal width
         --diff-stat-align-width <diff-stat-align-width>
             Width allocated for file paths in a diff stat section. If a relativized file path exceeds this width then
             the diff stat will be misaligned [default: 48]
@@ -1024,7 +1028,9 @@ OPTIONS:
             "24bit". If your terminal application (the application you use to enter commands at a shell prompt) supports
             24 bit colors, then it probably already sets this environment variable, in which case you don't need to do
             anything [default: auto]
-        --24-bit-color <24-bit-color>                                      Deprecated: use --true-color
+        --24-bit-color <24-bit-color>
+            Deprecated: use --true-color
+
         --inspect-raw-lines <inspect-raw-lines>
             Whether to examine ANSI color escape sequences in raw lines received from Git and handle lines colored in
             certain ways specially. This is on by default: it is how Delta supports Git's --color-moved feature. Set
@@ -1072,7 +1078,9 @@ OPTIONS:
         --hunk-color <deprecated-hunk-color>
             Deprecated: use --hunk-header-style='my_foreground_color' --hunk-header-decoration-
             style='my_foreground_color'
-        --theme <deprecated-theme>                                         Deprecated: use --syntax-theme
+        --theme <deprecated-theme>
+            Deprecated: use --syntax-theme
+
 
 ARGS:
     <minus-file>    First file to be compared when delta is being used in diff mode: `delta file_1 file_2` is

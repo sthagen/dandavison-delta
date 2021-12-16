@@ -320,16 +320,18 @@ pub struct Opt {
     pub color_only: bool,
 
     ////////////////////////////////////////////////////////////////////////////////////////////
-    #[structopt(long = "features", default_value = "", env = "DELTA_FEATURES")]
+    #[structopt(long = "features")]
     /// Name of delta features to use (space-separated). A feature is a named collection of delta
-    /// options in ~/.gitconfig. See FEATURES section.
-    pub features: String,
+    /// options in ~/.gitconfig. See FEATURES section. The environment variable DELTA_FEATURES can
+    /// be set to a space-separated list of feature names. If this is preceded with a space, the
+    /// features from the environment variable will be added to those specified in git config. E.g.
+    /// DELTA_FEATURES=+side-by-side can be used to activate side-by-side temporarily.
+    pub features: Option<String>,
 
-    #[structopt(long = "syntax-theme", env = "BAT_THEME")]
+    #[structopt(long = "syntax-theme")]
     /// The code syntax-highlighting theme to use. Use --show-syntax-themes to demo available
-    /// themes. If the syntax-highlighting theme is not set using this option, it will be taken
-    /// from the BAT_THEME environment variable, if that contains a valid theme name.
-    /// --syntax-theme=none disables all syntax highlighting.
+    /// themes. Defaults to the value of the BAT_THEME environment variable, if that contains a
+    /// valid theme name. --syntax-theme=none disables all syntax highlighting.
     pub syntax_theme: Option<String>,
 
     #[structopt(long = "minus-style", default_value = "normal auto")]
@@ -674,8 +676,8 @@ pub struct Opt {
     pub line_fill_method: Option<String>,
 
     /// The width of underline/overline decorations. Examples: "72" (exactly 72 characters),
-    // "-2" (auto-detected terminal width minus 2). An expression such as "74-2" is also valid
-    // (equivalent to 72 but may be useful if the caller has a variable holding the value "74").
+    /// "-2" (auto-detected terminal width minus 2). An expression such as "74-2" is also valid
+    /// (equivalent to 72 but may be useful if the caller has a variable holding the value "74").
     /// Use --width=variable to extend decorations and background colors to the end of the text
     /// only. Otherwise background colors extend to the full terminal width.
     #[structopt(short = "w", long = "width")]

@@ -225,7 +225,7 @@ pub fn paint_minus_and_plus_lines_side_by_side(
 
 #[allow(clippy::too_many_arguments)]
 pub fn paint_zero_lines_side_by_side<'a>(
-    raw_line: &str,
+    line: &str,
     syntax_style_sections: Vec<LineSections<'a, SyntectStyle>>,
     diff_style_sections: Vec<LineSections<'a, Style>>,
     output_buffer: &mut String,
@@ -234,11 +234,11 @@ pub fn paint_zero_lines_side_by_side<'a>(
     painted_prefix: Option<ansi_term::ANSIString>,
     background_color_extends_to_terminal_width: BgShouldFill,
 ) {
-    let states = vec![State::HunkZero(DiffType::Unified)];
+    let states = vec![State::HunkZero(DiffType::Unified, None)];
 
     let (states, syntax_style_sections, diff_style_sections) = wrap_zero_block(
         config,
-        raw_line,
+        line,
         states,
         syntax_style_sections,
         diff_style_sections,
@@ -496,7 +496,7 @@ fn pad_panel_line_to_width<'a>(
                 panel_line,
                 Some(" "),
             ),
-            State::HunkZero(_) => {}
+            State::HunkZero(_, _) => {}
             _ => unreachable!(),
         };
     };
