@@ -491,9 +491,16 @@ pub struct Opt {
     /// "{timestamp}", "{author}", and "{commit}".
     #[structopt(
         long = "blame-format",
-        default_value = "{timestamp:<15} {author:<15.14} {commit:<8} │ "
+        default_value = "{timestamp:<15} {author:<15.14} {commit:<8} │"
     )]
     pub blame_format: String,
+
+    #[structopt(long = "blame-code-style")]
+    /// Style (foreground, background, attributes) for the code section of a line of `git blame`
+    /// output. By default the code will be syntax-highlighted with the same background color as the
+    /// blame format section of the line (the background color is determined by blame-palette). E.g.
+    /// setting this option to 'syntax' will syntax-highlight the code with no background color.
+    pub blame_code_style: Option<String>,
 
     /// Background colors used for git blame lines (space-separated string).
     /// Lines added by the same commit are painted with the same color; colors
