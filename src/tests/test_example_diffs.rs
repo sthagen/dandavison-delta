@@ -7,66 +7,53 @@ mod tests {
     use crate::style;
     use crate::tests::ansi_test_utils::ansi_test_utils;
     use crate::tests::integration_test_utils;
-    use crate::tests::test_utils;
+    use crate::tests::integration_test_utils::DeltaTest;
 
     #[test]
     fn test_added_file() {
-        let config = integration_test_utils::make_config_from_args(&[]);
-        let output = integration_test_utils::run_delta(ADDED_FILE_INPUT, &config);
-        let output = strip_ansi_codes(&output);
-        assert!(output.contains("\nadded: a.py\n"));
+        DeltaTest::with_args(&[])
+            .with_input(ADDED_FILE_INPUT)
+            .expect_contains("\nadded: a.py\n");
     }
 
     #[test]
     #[ignore] // #128
     fn test_added_empty_file() {
-        let config = integration_test_utils::make_config_from_args(&[]);
-        let output = integration_test_utils::run_delta(ADDED_EMPTY_FILE, &config);
-        let output = strip_ansi_codes(&output);
-        assert!(output.contains("\nadded: file\n"));
+        DeltaTest::with_args(&[])
+            .with_input(ADDED_EMPTY_FILE)
+            .expect_contains("\nadded: file\n");
     }
 
     #[test]
     fn test_added_file_directory_path_containing_space() {
-        let config = integration_test_utils::make_config_from_args(&[]);
-        let output =
-            integration_test_utils::run_delta(ADDED_FILES_DIRECTORY_PATH_CONTAINING_SPACE, &config);
-        let output = strip_ansi_codes(&output);
-        assert!(output.contains("\nadded: with space/file1\n"));
-        assert!(output.contains("\nadded: nospace/file2\n"));
+        DeltaTest::with_args(&[])
+            .with_input(ADDED_FILES_DIRECTORY_PATH_CONTAINING_SPACE)
+            .expect_contains("\nadded: with space/file1\n")
+            .expect_contains("\nadded: nospace/file2\n");
     }
 
     #[test]
     fn test_renamed_file() {
-        let config = integration_test_utils::make_config_from_args(&[]);
-        let output = integration_test_utils::run_delta(RENAMED_FILE_INPUT, &config);
-        let output = strip_ansi_codes(&output);
-        assert!(test_utils::contains_once(
-            &output,
-            "\nrenamed: a.py ⟶   b.py\n"
-        ));
+        DeltaTest::with_args(&[])
+            .with_input(RENAMED_FILE_INPUT)
+            .expect_contains_once("\nrenamed: a.py ⟶   b.py\n");
     }
 
     #[test]
     fn test_copied_file() {
-        let config = integration_test_utils::make_config_from_args(&[]);
-        let output = integration_test_utils::run_delta(GIT_DIFF_WITH_COPIED_FILE, &config);
-        let output = strip_ansi_codes(&output);
-        assert!(test_utils::contains_once(
-            &output,
-            "\ncopied: first_file ⟶   copied_file\n"
-        ));
+        DeltaTest::with_args(&[])
+            .with_input(GIT_DIFF_WITH_COPIED_FILE)
+            .expect_contains_once("\ncopied: first_file ⟶   copied_file\n");
     }
 
     #[test]
     fn test_renamed_file_with_changes() {
-        let config = integration_test_utils::make_config_from_args(&[]);
-        let output = integration_test_utils::run_delta(RENAMED_FILE_WITH_CHANGES_INPUT, &config);
-        let output = strip_ansi_codes(&output);
-        println!("{}", output);
-        assert!(test_utils::contains_once(
-            &output,
-            "\nrenamed: Casks/font-dejavusansmono-nerd-font.rb ⟶   Casks/font-dejavu-sans-mono-nerd-font.rb\n"));
+        let t = DeltaTest::with_args(&[])
+            .with_input(RENAMED_FILE_WITH_CHANGES_INPUT)
+            .expect_contains_once(
+            "\nrenamed: Casks/font-dejavusansmono-nerd-font.rb ⟶   Casks/font-dejavu-sans-mono-nerd-font.rb\n"
+            );
+        println!("{}", t.output);
     }
 
     #[test]
@@ -400,11 +387,6 @@ commit 94907c0f136f46dc46ffae2dc92dca9af7eb7c2e
         ]);
     }
 
-    #[test]
-    fn test_commit_style_box_ul_deprecated_options() {
-        _do_test_commit_style_box_ul(&["--commit-color", "blue", "--commit-style", "box"]);
-    }
-
     fn _do_test_commit_style_box(args: &[&str]) {
         let config = integration_test_utils::make_config_from_args(args);
         let output = integration_test_utils::run_delta(GIT_DIFF_SINGLE_HUNK, &config);
@@ -537,16 +519,6 @@ commit 94907c0f136f46dc46ffae2dc92dca9af7eb7c2e │
             "yellow",
             "--commit-decoration-style",
             "yellow underline",
-        ]);
-    }
-
-    #[test]
-    fn test_commit_style_underline_deprecated_options() {
-        _do_test_commit_style_underline(&[
-            "--commit-color",
-            "yellow",
-            "--commit-style",
-            "underline",
         ]);
     }
 
@@ -717,11 +689,6 @@ src/align.rs
         ]);
     }
 
-    #[test]
-    fn test_file_style_box_ul_deprecated_options() {
-        _do_test_file_style_box_ul(&["--file-color", "green", "--file-style", "box"]);
-    }
-
     fn _do_test_file_style_box(args: &[&str]) {
         let config = integration_test_utils::make_config_from_args(args);
         let output = integration_test_utils::run_delta(GIT_DIFF_SINGLE_HUNK, &config);
@@ -795,11 +762,6 @@ src/align.rs │
             "--file-decoration-style",
             "magenta underline",
         ]);
-    }
-
-    #[test]
-    fn test_file_style_underline_deprecated_options() {
-        _do_test_file_style_underline(&["--file-color", "magenta", "--file-style", "underline"]);
     }
 
     fn _do_test_file_style_underline(args: &[&str]) {
@@ -1220,11 +1182,6 @@ impl<'a> Alignment<'a> {
         ]);
     }
 
-    #[test]
-    fn test_hunk_header_style_box_deprecated_options() {
-        _do_test_hunk_header_style_box(&["--hunk-color", "white", "--hunk-style", "box"]);
-    }
-
     fn _do_test_hunk_header_style_box(args: &[&str]) {
         let config = integration_test_utils::make_config_from_args(args);
         let output = integration_test_utils::run_delta(GIT_DIFF_SINGLE_HUNK, &config);
@@ -1334,16 +1291,6 @@ src/align.rs:71: impl<'a> Alignment<'a> { │
         _do_test_hunk_header_style_underline(&[
             "--hunk-header-decoration-style",
             "black underline",
-        ]);
-    }
-
-    #[test]
-    fn test_hunk_header_style_underline_deprecated_options() {
-        _do_test_hunk_header_style_underline(&[
-            "--hunk-color",
-            "black",
-            "--hunk-style",
-            "underline",
         ]);
     }
 
@@ -1585,51 +1532,75 @@ src/align.rs:71: impl<'a> Alignment<'a> { │
     }
 
     #[test]
-    fn test_file_mode_change_gain_executable_bit() {
-        let config = integration_test_utils::make_config_from_args(&[]);
-        let output = integration_test_utils::run_delta(
-            GIT_DIFF_FILE_MODE_CHANGE_GAIN_EXECUTABLE_BIT,
-            &config,
-        );
+    fn test_file_mode_change_with_rename() {
+        let config = integration_test_utils::make_config_from_args(&["--right-arrow=->"]);
+        let output =
+            integration_test_utils::run_delta(GIT_DIFF_FILE_MODE_CHANGE_WITH_RENAME, &config);
         let output = strip_ansi_codes(&output);
-        assert!(output.contains(r"src/delta.rs: mode +x"));
+        assert!(output.contains("renamed: old-longer-name -> shorter-name (mode +x)"));
+    }
+
+    #[test]
+    fn test_file_mode_change_gain_executable_bit() {
+        DeltaTest::with_args(&[])
+            .with_input(GIT_DIFF_FILE_MODE_CHANGE_GAIN_EXECUTABLE_BIT)
+            .expect_contains("src/delta.rs (mode +x)");
     }
 
     #[test]
     fn test_file_mode_change_lose_executable_bit() {
-        let config = integration_test_utils::make_config_from_args(&[]);
-        let output = integration_test_utils::run_delta(
-            GIT_DIFF_FILE_MODE_CHANGE_LOSE_EXECUTABLE_BIT,
-            &config,
-        );
-        let output = strip_ansi_codes(&output);
-        assert!(output.contains(r"src/delta.rs: mode -x"));
+        DeltaTest::with_args(&[])
+            .with_input(GIT_DIFF_FILE_MODE_CHANGE_LOSE_EXECUTABLE_BIT)
+            .expect_contains("src/delta.rs (mode -x)");
+    }
+
+    #[test]
+    fn test_file_mode_change_unexpected_bits() {
+        DeltaTest::with_args(&["--navigate", "--right-arrow=->"])
+            .with_input(GIT_DIFF_FILE_MODE_CHANGE_UNEXPECTED_BITS)
+            .expect_contains("Δ src/delta.rs (mode 100700 -> 100644)");
+    }
+
+    #[test]
+    fn test_file_mode_change_with_diff() {
+        DeltaTest::with_args(&["--navigate", "--keep-plus-minus-markers"])
+            .with_input(GIT_DIFF_FILE_MODE_CHANGE_WITH_DIFF)
+            .expect_contains("Δ src/script (mode +x)")
+            .expect_after_skip(
+                5,
+                "
+                ─────┐
+                • 1: │
+                ─────┘
+                -#!/bin/sh
+                +#!/bin/bash",
+            );
     }
 
     #[test]
     fn test_hyperlinks_commit_link_format() {
-        let config = integration_test_utils::make_config_from_args(&[
-            // If commit-style is not set then the commit line is handled in raw
-            // mode, in which case we only format hyperlinks if output is a tty;
-            // this causes the test to fail on Github Actions, but pass locally
-            // if output is left going to the screen.
-            "--commit-style",
-            "blue",
-            "--hyperlinks",
-            "--hyperlinks-commit-link-format",
-            "https://invent.kde.org/utilities/konsole/-/commit/{commit}",
-        ]);
-        let output = integration_test_utils::run_delta(GIT_DIFF_SINGLE_HUNK, &config);
-        assert!(output.contains(r"https://invent.kde.org/utilities/konsole/-/commit/94907c0f136f46dc46ffae2dc92dca9af7eb7c2e"));
+        // If commit-style is not set then the commit line is handled in raw
+        // mode, in which case we only format hyperlinks if output is a tty;
+        // this causes the test to fail on Github Actions, but pass locally
+        // if output is left going to the screen.
+        DeltaTest::with_args(&[
+                "--commit-style",
+                "blue",
+                "--hyperlinks",
+                "--hyperlinks-commit-link-format",
+                "https://invent.kde.org/utilities/konsole/-/commit/{commit}",
+            ])
+            .with_input(GIT_DIFF_SINGLE_HUNK)
+            .expect_raw_contains(
+                r"https://invent.kde.org/utilities/konsole/-/commit/94907c0f136f46dc46ffae2dc92dca9af7eb7c2e"
+                );
     }
 
     #[test]
     fn test_filenames_with_spaces() {
-        let config = integration_test_utils::make_config_from_args(&[]);
-        let output =
-            integration_test_utils::run_delta(GIT_DIFF_NO_INDEX_FILENAMES_WITH_SPACES, &config);
-        let output = strip_ansi_codes(&output);
-        assert!(output.contains("a b ⟶   c d\n"));
+        DeltaTest::with_args(&[])
+            .with_input(GIT_DIFF_NO_INDEX_FILENAMES_WITH_SPACES)
+            .expect_contains("a b ⟶   c d\n");
     }
 
     const GIT_DIFF_SINGLE_HUNK: &str = "\
@@ -2306,6 +2277,15 @@ Date:   Sun Nov 1 15:28:53 2020 -0500
 [32m+[m[32m][m
 "#;
 
+    const GIT_DIFF_FILE_MODE_CHANGE_WITH_RENAME: &str = "
+diff --git a/old-longer-name b/shorter-name
+old mode 100644
+new mode 100755
+similarity index 100%
+rename from old-longer-name
+rename to shorter-name
+";
+
     const GIT_DIFF_FILE_MODE_CHANGE_GAIN_EXECUTABLE_BIT: &str = "
 diff --git a/src/delta.rs b/src/delta.rs
 old mode 100644
@@ -2316,6 +2296,24 @@ new mode 100755
 diff --git a/src/delta.rs b/src/delta.rs
 old mode 100755
 new mode 100644
+";
+
+    const GIT_DIFF_FILE_MODE_CHANGE_UNEXPECTED_BITS: &str = "
+diff --git a/src/delta.rs b/src/delta.rs
+old mode 100700
+new mode 100644
+";
+
+    const GIT_DIFF_FILE_MODE_CHANGE_WITH_DIFF: &str = "
+diff --git a/src/script b/src/script
+old mode 100644
+new mode 100755
+index d00491f..0cfbf08 100644
+--- a/src/script
++++ b/src/script
+@@ -1 +1 @@
+-#!/bin/sh
++#!/bin/bash
 ";
 
     const GIT_DIFF_NO_INDEX_FILENAMES_WITH_SPACES: &str = "

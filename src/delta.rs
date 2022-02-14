@@ -25,7 +25,7 @@ pub enum State {
     MergeConflict(MergeParents, merge_conflict::MergeConflictCommit),
     SubmoduleLog, // In a submodule section, with gitconfig diff.submodule = log
     SubmoduleShort(String), // In a submodule section, with gitconfig diff.submodule = short
-    Blame(String, Option<String>), // In a line of `git blame` output (commit, repeat_blame_line).
+    Blame(String), // In a line of `git blame` output (key).
     GitShowFile,  // In a line of `git show $revision:./path/to/file.ext` output
     Grep,         // In a line of `git grep` output
     Unknown,
@@ -97,6 +97,7 @@ pub struct StateMachine<'a> {
     pub minus_file_event: handlers::diff_header::FileEvent,
     pub plus_file_event: handlers::diff_header::FileEvent,
     pub diff_line: String,
+    pub mode_info: String,
     pub painter: Painter<'a>,
     pub config: &'a Config,
 
@@ -107,7 +108,7 @@ pub struct StateMachine<'a> {
     // avoid emitting the file meta header line twice (#245).
     pub current_file_pair: Option<(String, String)>,
     pub handled_diff_header_header_line_file_pair: Option<(String, String)>,
-    pub blame_commit_colors: HashMap<String, String>,
+    pub blame_key_colors: HashMap<String, String>,
 }
 
 pub fn delta<I>(lines: ByteLines<I>, writer: &mut dyn Write, config: &Config) -> std::io::Result<()>
@@ -129,11 +130,12 @@ impl<'a> StateMachine<'a> {
             minus_file_event: handlers::diff_header::FileEvent::NoEvent,
             plus_file_event: handlers::diff_header::FileEvent::NoEvent,
             diff_line: "".to_string(),
+            mode_info: "".to_string(),
             current_file_pair: None,
             handled_diff_header_header_line_file_pair: None,
             painter: Painter::new(writer, config),
             config,
-            blame_commit_colors: HashMap::new(),
+            blame_key_colors: HashMap::new(),
         }
     }
 
@@ -158,6 +160,7 @@ impl<'a> StateMachine<'a> {
                 || self.handle_diff_header_minus_line()?
                 || self.handle_diff_header_plus_line()?
                 || self.handle_hunk_header_line()?
+                || self.handle_diff_header_mode_line()?
                 || self.handle_diff_header_misc_line()?
                 || self.handle_submodule_log_line()?
                 || self.handle_submodule_short_line()?
@@ -170,6 +173,7 @@ impl<'a> StateMachine<'a> {
                 || self.emit_line_unchanged()?;
         }
 
+        self.handle_pending_mode_line_with_diff_name()?;
         self.painter.paint_buffered_minus_and_plus_lines();
         self.painter.emit()?;
         Ok(())

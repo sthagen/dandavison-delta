@@ -246,8 +246,8 @@ fn get_code_style_sections<'b>(
 }
 
 fn make_output_config() -> GrepOutputConfig {
-    match process::calling_process().as_deref() {
-        Some(process::CallingProcess::GitGrep(command_line))
+    match &*process::calling_process() {
+        process::CallingProcess::GitGrep(command_line)
             if command_line.short_options.contains("-W")
                 || command_line.long_options.contains("--function-context") =>
         {
@@ -265,7 +265,7 @@ fn make_output_config() -> GrepOutputConfig {
                 pad_line_number: true,
             }
         }
-        Some(process::CallingProcess::GitGrep(command_line))
+        process::CallingProcess::GitGrep(command_line)
             if command_line.short_options.contains("-p")
                 || command_line.long_options.contains("--show-function") =>
         {
@@ -288,18 +288,30 @@ fn make_output_config() -> GrepOutputConfig {
 }
 
 enum GrepLineRegex {
-    FilePathWithFileExtension,
-    FilePathWithoutSeparatorCharacters,
+    WithFileExtensionAndLineNumber,
+    WithFileExtension,
+    WithFileExtensionNoSpaces,
+    WithoutSeparatorCharacters,
+}
+
+lazy_static! {
+    static ref GREP_LINE_REGEX_ASSUMING_FILE_EXTENSION_AND_LINE_NUMBER: Regex =
+        make_grep_line_regex(GrepLineRegex::WithFileExtensionAndLineNumber);
+}
+
+lazy_static! {
+    static ref GREP_LINE_REGEX_ASSUMING_FILE_EXTENSION_NO_SPACES: Regex =
+        make_grep_line_regex(GrepLineRegex::WithFileExtensionNoSpaces);
 }
 
 lazy_static! {
     static ref GREP_LINE_REGEX_ASSUMING_FILE_EXTENSION: Regex =
-        make_grep_line_regex(GrepLineRegex::FilePathWithFileExtension);
+        make_grep_line_regex(GrepLineRegex::WithFileExtension);
 }
 
 lazy_static! {
     static ref GREP_LINE_REGEX_ASSUMING_NO_INTERNAL_SEPARATOR_CHARS: Regex =
-        make_grep_line_regex(GrepLineRegex::FilePathWithoutSeparatorCharacters);
+        make_grep_line_regex(GrepLineRegex::WithoutSeparatorCharacters);
 }
 
 // See tests for example grep lines
@@ -328,16 +340,24 @@ fn make_grep_line_regex(regex_variant: GrepLineRegex) -> Regex {
     // Make-7-file-7-xxx
 
     let file_path = match regex_variant {
-        GrepLineRegex::FilePathWithFileExtension => {
+        GrepLineRegex::WithFileExtensionAndLineNumber | GrepLineRegex::WithFileExtension => {
             r"
         (                        # 1. file name (colons not allowed)
             [^:|\ ]                 # try to be strict about what a file path can start with
             [^:]*                   # anything
-            \.[^.\ :=-]{1,6}        # extension
+            [^\ ]\.[^.\ :=-]{1,6}   # extension
         )    
         "
         }
-        GrepLineRegex::FilePathWithoutSeparatorCharacters => {
+        GrepLineRegex::WithFileExtensionNoSpaces => {
+            r"
+        (                        # 1. file name (colons not allowed)
+            [^:|\ ]+                # try to be strict about what a file path can start with
+            [^\ ]\.[^.\ :=-]{1,6}   # extension
+        )    
+        "
+        }
+        GrepLineRegex::WithoutSeparatorCharacters => {
             r"
         (                        # 1. file name (colons not allowed)
             [^:|\ =-]               # try to be strict about what a file path can start with
@@ -348,30 +368,59 @@ fn make_grep_line_regex(regex_variant: GrepLineRegex) -> Regex {
         }
     };
 
+    let separator = match regex_variant {
+        GrepLineRegex::WithFileExtensionAndLineNumber => {
+            r#"
+    (?:
+        (
+            :                # 2. match marker
+            ([0-9]+):        # 3. line number followed by second match marker
+        )
+        |
+        (
+            -                # 4. nomatch marker
+            ([0-9]+)-        # 5. line number followed by second nomatch marker
+        )
+        |
+        (
+            =                # 6. match marker
+            ([0-9]+)=        # 7. line number followed by second header marker
+        )
+    )
+            "#
+        }
+        _ => {
+            r#"
+    (?:
+        (                    
+            :                # 2. match marker
+            (?:([0-9]+):)?   # 3. optional: line number followed by second match marker
+        )
+        |
+        (
+            -                # 4. nomatch marker
+            (?:([0-9]+)-)?   # 5. optional: line number followed by second nomatch marker
+        )
+        |
+        (
+            =                # 6. match marker
+            (?:([0-9]+)=)?   # 7. optional: line number followed by second header marker
+        )
+    )
+        "#
+        }
+    };
+
     Regex::new(&format!(
         "(?x)
 ^
 {file_path}
-(?:
-    (                    
-        :                # 2. match marker
-        (?:([0-9]+):)?   # 3. optional: line number followed by second match marker
-    )
-    |
-    (
-        -                # 4. nomatch marker
-        (?:([0-9]+)-)?   # 5. optional: line number followed by second nomatch marker
-    )
-    |
-    (
-        =                # 6. match marker
-        (?:([0-9]+)=)?   # 7. optional: line number followed by second header marker
-    )
-)
+{separator}
 (.*)                     # 8. code (i.e. line contents)
 $
 ",
-        file_path = file_path
+        file_path = file_path,
+        separator = separator,
     ))
     .unwrap()
 }
@@ -380,9 +429,10 @@ pub fn parse_grep_line(line: &str) -> Option<GrepLine> {
     if line.starts_with('{') {
         ripgrep_json::parse_line(line)
     } else {
-        match process::calling_process().as_deref() {
-            Some(process::CallingProcess::GitGrep(_))
-            | Some(process::CallingProcess::OtherGrep) => [
+        match &*process::calling_process() {
+            process::CallingProcess::GitGrep(_) | process::CallingProcess::OtherGrep => [
+                &*GREP_LINE_REGEX_ASSUMING_FILE_EXTENSION_AND_LINE_NUMBER,
+                &*GREP_LINE_REGEX_ASSUMING_FILE_EXTENSION_NO_SPACES,
                 &*GREP_LINE_REGEX_ASSUMING_FILE_EXTENSION,
                 &*GREP_LINE_REGEX_ASSUMING_NO_INTERNAL_SEPARATOR_CHARS,
             ]
@@ -404,8 +454,7 @@ pub fn _parse_grep_line<'b>(regex: &Regex, line: &'b str) -> Option<GrepLine<'b>
     .iter()
     .find_map(|(i, line_type)| {
         if caps.get(*i).is_some() {
-            let line_number: Option<usize> =
-                caps.get(i + 1).map(|m| m.as_str().parse().ok()).flatten();
+            let line_number: Option<usize> = caps.get(i + 1).and_then(|m| m.as_str().parse().ok());
             Some((*line_type, line_number))
         } else {
             None
@@ -431,7 +480,7 @@ mod tests {
     #[test]
     fn test_parse_grep_match() {
         let fake_parent_grep_command = "git --doesnt-matter grep --nor-this nor_this -- nor_this";
-        let _args = FakeParentArgs::for_scope(&fake_parent_grep_command);
+        let _args = FakeParentArgs::for_scope(fake_parent_grep_command);
 
         assert_eq!(
             parse_grep_line("src/co-7-fig.rs:xxx"),
@@ -523,7 +572,7 @@ mod tests {
     fn test_parse_grep_n_match() {
         let fake_parent_grep_command =
             "/usr/local/bin/git --doesnt-matter grep --nor-this nor_this -- nor_this";
-        let _args = FakeParentArgs::for_scope(&fake_parent_grep_command);
+        let _args = FakeParentArgs::for_scope(fake_parent_grep_command);
 
         assert_eq!(
             parse_grep_line("src/co-7-fig.rs:7:xxx"),
@@ -592,7 +641,7 @@ mod tests {
         // This fails: we can't parse it currently.
         let fake_parent_grep_command =
             "/usr/local/bin/git --doesnt-matter grep --nor-this nor_this -- nor_this";
-        let _args = FakeParentArgs::once(&fake_parent_grep_command);
+        let _args = FakeParentArgs::once(fake_parent_grep_command);
 
         assert_eq!(
             parse_grep_line("etc/examples/119-within-line-edits:4:repo=$(mktemp -d)"),
@@ -610,7 +659,7 @@ mod tests {
     fn test_parse_grep_no_match() {
         let fake_parent_grep_command =
             "/usr/local/bin/git --doesnt-matter grep --nor-this nor_this -- nor_this";
-        let _args = FakeParentArgs::for_scope(&fake_parent_grep_command);
+        let _args = FakeParentArgs::for_scope(fake_parent_grep_command);
 
         assert_eq!(
             parse_grep_line("src/co-7-fig.rs-xxx"),
@@ -655,6 +704,28 @@ mod tests {
                 submatches: None,
             })
         );
+
+        assert_eq!(
+            parse_grep_line(r#"aaa/bbb.scala-              s"xxx.yyy.zzz: $ccc ddd""#),
+            Some(GrepLine {
+                path: "aaa/bbb.scala".into(),
+                line_number: None,
+                line_type: LineType::Context,
+                code: r#"              s"xxx.yyy.zzz: $ccc ddd""#.into(),
+                submatches: None,
+            })
+        );
+
+        assert_eq!(
+            parse_grep_line(r#"aaa/bbb.scala-  val atRegex = Regex.compile("(@.*)|(-shdw@.*)""#),
+            Some(GrepLine {
+                path: "aaa/bbb.scala".into(),
+                line_number: None,
+                line_type: LineType::Context,
+                code: r#"  val atRegex = Regex.compile("(@.*)|(-shdw@.*)""#.into(),
+                submatches: None,
+            })
+        );
     }
 
     #[test]
@@ -663,7 +734,7 @@ mod tests {
         let fake_parent_grep_command =
             "/usr/local/bin/git --doesnt-matter grep --nor-this nor_this -- nor_this";
 
-        let _args = FakeParentArgs::for_scope(&fake_parent_grep_command);
+        let _args = FakeParentArgs::for_scope(fake_parent_grep_command);
         assert_eq!(
             parse_grep_line("src/co-7-fig.rs-7-xxx"),
             Some(GrepLine {
@@ -685,13 +756,35 @@ mod tests {
                 submatches: None,
             })
         );
+
+        assert_eq!(
+            parse_grep_line(r#"foo.rs-12-  .x-"#),
+            Some(GrepLine {
+                path: "foo.rs".into(),
+                line_number: Some(12),
+                line_type: LineType::Context,
+                code: r#"  .x-"#.into(),
+                submatches: None,
+            })
+        );
+
+        assert_eq!(
+            parse_grep_line(r#"foo.rs-12-.x-"#),
+            Some(GrepLine {
+                path: "foo.rs".into(),
+                line_number: Some(12),
+                line_type: LineType::Context,
+                code: r#".x-"#.into(),
+                submatches: None,
+            })
+        );
     }
 
     #[test]
     fn test_parse_grep_match_no_extension() {
         let fake_parent_grep_command =
             "/usr/local/bin/git --doesnt-matter grep --nor-this nor_this -- nor_this";
-        let _args = FakeParentArgs::once(&fake_parent_grep_command);
+        let _args = FakeParentArgs::once(fake_parent_grep_command);
 
         assert_eq!(
             parse_grep_line("Makefile:xxx"),
@@ -710,7 +803,7 @@ mod tests {
         // git grep -n
         let fake_parent_grep_command =
             "/usr/local/bin/git --doesnt-matter grep --nor-this nor_this -- nor_this";
-        let _args = FakeParentArgs::once(&fake_parent_grep_command);
+        let _args = FakeParentArgs::once(fake_parent_grep_command);
         assert_eq!(
             parse_grep_line("Makefile:7:xxx"),
             Some(GrepLine {
@@ -730,7 +823,7 @@ mod tests {
         let fake_parent_grep_command =
             "/usr/local/bin/git --doesnt-matter grep --nor-this nor_this -- nor_this";
 
-        let _args = FakeParentArgs::once(&fake_parent_grep_command);
+        let _args = FakeParentArgs::once(fake_parent_grep_command);
         assert_eq!(
             parse_grep_line("src/config.rs=pub struct Config {"), // match
             Some(GrepLine {
@@ -749,7 +842,7 @@ mod tests {
         // git grep -n -W
         let fake_parent_grep_command =
             "/usr/local/bin/git --doesnt-matter grep --nor-this nor_this -- nor_this";
-        let _args = FakeParentArgs::once(&fake_parent_grep_command);
+        let _args = FakeParentArgs::once(fake_parent_grep_command);
 
         assert_eq!(
             parse_grep_line("src/config.rs=57=pub struct Config {"),
@@ -767,7 +860,7 @@ mod tests {
     fn test_parse_grep_not_grep_output() {
         let fake_parent_grep_command =
             "/usr/local/bin/git --doesnt-matter grep --nor-this nor_this -- nor_this";
-        let _args = FakeParentArgs::once(&fake_parent_grep_command);
+        let _args = FakeParentArgs::once(fake_parent_grep_command);
 
         let not_grep_output = "|       expose it in delta's color output styled with grep:";
         assert_eq!(parse_grep_line(not_grep_output), None);
@@ -777,7 +870,7 @@ mod tests {
     fn test_parse_grep_parent_command_is_not_grep_1() {
         let fake_parent_grep_command =
             "/usr/local/bin/notgrep --doesnt-matter --nor-this nor_this -- nor_this";
-        let _args = FakeParentArgs::once(&fake_parent_grep_command);
+        let _args = FakeParentArgs::once(fake_parent_grep_command);
 
         let apparently_grep_output = "src/co-7-fig.rs:xxx";
         assert_eq!(parse_grep_line(apparently_grep_output), None);

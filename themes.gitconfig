@@ -219,17 +219,17 @@
     file-style = omit
     zero-style = syntax
     syntax-theme = Monokai Extended
-    commit-decoration-style ="#ff5500" box
-    commit-style = "#FFD21A" bold italic
+    commit-decoration-style ="#11ce16" box
+    commit-style = "#ffd21a" bold italic
     hunk-header-decoration-style = "#1688f0" box ul
-    hunk-header-file-style = "#FFD21A" ul bold "#640BFF"
-    hunk-header-line-number-style = "#FFD21A" box bold
+    hunk-header-file-style = "#c63bee" ul bold
+    hunk-header-line-number-style = "#ffd21a" box bold
     hunk-header-style = file line-number syntax bold italic
     line-numbers = true
     line-numbers-left-format = "{nm:>1}|"
     line-numbers-left-style = "#1688f0"
-    line-numbers-minus-style = red bold
-    line-numbers-plus-style = green bold
+    line-numbers-minus-style = "#ff0051" bold
+    line-numbers-plus-style = "#03e57f" bold
     line-numbers-right-format = "{np:>1}|"
     line-numbers-right-style = "#1688f0"
     line-numbers-zero-style = "#aaaaaa" italic
@@ -238,3 +238,61 @@
     plus-emph-style = syntax bold "#007800"
     plus-style = syntax "#004433"
     whitespace-error-style = "#280050"
+
+[delta "mantis-shrimp-lite"]
+    #author: https://github.com/2kabhishek
+    dark = true
+    side-by-side = true
+    navigate = true
+    keep-plus-minus-markers = true
+    file-added-label = [+]
+    file-copied-label = [==]
+    file-modified-label = [*]
+    file-removed-label = [-]
+    file-renamed-label = [->]
+    file-style = omit
+    zero-style = syntax
+    syntax-theme = Monokai Extended
+    commit-decoration-style = green box
+    commit-style = yellow bold italic
+    hunk-header-decoration-style = blue box ul
+    hunk-header-file-style = purple ul bold
+    hunk-header-line-number-style = yellow box bold
+    hunk-header-style = file line-number syntax bold italic
+    line-numbers = true
+    line-numbers-left-format = "{nm:>1}|"
+    line-numbers-left-style = blue
+    line-numbers-minus-style = red bold
+    line-numbers-plus-style = green bold
+    line-numbers-right-format = "{np:>1}|"
+    line-numbers-right-style = blue
+    line-numbers-zero-style = white italic
+    minus-emph-style = syntax bold red
+    plus-emph-style = syntax bold green
+    whitespace-error-style = purple bold
+
+[delta "zebra-dark"]
+    minus-style = syntax "#330f0f"
+    minus-emph-style = syntax "#4f1917"
+    plus-style = syntax "#0e2f19"
+    plus-emph-style = syntax "#174525"
+    map-styles = \
+       bold purple => syntax "#330f29", \
+       bold blue => syntax "#271344", \
+       bold cyan => syntax "#0d3531", \
+       bold yellow => syntax "#222f14"
+    zero-style = syntax
+    whitespace-error-style = "#aaaaaa"
+
+[delta "zebra-light"]
+    minus-style = syntax "#fbdada"
+    minus-emph-style = syntax "#f6b6b6"
+    plus-style = syntax "#d6ffd6"
+    plus-emph-style = syntax "#adffad"
+    map-styles = \
+       bold purple => syntax "#feecf7", \
+       bold blue => syntax "#e5dff6", \
+       bold cyan => syntax "#d8fdf6", \
+       bold yellow => syntax "#f4ffe0"
+    zero-style = syntax
+    whitespace-error-style = "#aaaaaa"

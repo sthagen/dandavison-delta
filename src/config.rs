@@ -2,7 +2,6 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use regex::Regex;
-use structopt::clap;
 use syntect::highlighting::Style as SyntectStyle;
 use syntect::highlighting::Theme as SyntaxTheme;
 use syntect::parsing::SyntaxSet;
@@ -18,13 +17,17 @@ use crate::features::navigate;
 use crate::features::side_by_side::{self, ansifill, LeftRight};
 use crate::git_config::{GitConfig, GitConfigEntry};
 use crate::handlers;
+use crate::handlers::blame::parse_blame_line_numbers;
+use crate::handlers::blame::BlameLineNumbers;
 use crate::minusplus::MinusPlus;
 use crate::paint::BgFillMethod;
 use crate::parse_styles;
 use crate::style;
 use crate::style::Style;
 use crate::tests::TESTING;
+use crate::utils;
 use crate::utils::bat::output::PagingMode;
+use crate::utils::regex_replacement::RegexReplacement;
 use crate::utils::syntect::FromDeltaStyle;
 use crate::wrapping::WrapConfig;
 
@@ -57,16 +60,21 @@ fn adapt_wrap_max_lines_argument(arg: String) -> usize {
     }
 }
 
+#[cfg_attr(test, derive(Clone))]
 pub struct Config {
     pub available_terminal_width: usize,
     pub background_color_extends_to_terminal_width: bool,
     pub blame_code_style: Option<Style>,
     pub blame_format: String,
+    pub blame_separator_format: BlameLineNumbers,
     pub blame_palette: Vec<String>,
+    pub blame_separator_style: Option<Style>,
     pub blame_timestamp_format: String,
     pub color_only: bool,
     pub commit_regex: Regex,
     pub commit_style: Style,
+    pub cwd_of_delta_process: Option<PathBuf>,
+    pub cwd_of_user_shell_process: Option<PathBuf>,
     pub cwd_relative_to_repo_root: Option<String>,
     pub decorations_width: cli::Width,
     pub default_language: Option<String>,
@@ -77,6 +85,7 @@ pub struct Config {
     pub file_modified_label: String,
     pub file_removed_label: String,
     pub file_renamed_label: String,
+    pub file_regex_replacement: Option<RegexReplacement>,
     pub right_arrow: String,
     pub file_style: Style,
     pub git_config_entries: HashMap<String, GitConfigEntry>,
@@ -166,7 +175,7 @@ impl Config {
 
 impl From<cli::Opt> for Config {
     fn from(opt: cli::Opt) -> Self {
-        let styles = parse_styles::parse_styles(&opt);
+        let mut styles = parse_styles::parse_styles(&opt);
         let styles_map = parse_styles::parse_styles_map(&opt);
 
         let max_line_distance_for_naively_paired_lines =
@@ -236,19 +245,35 @@ impl From<cli::Opt> for Config {
 
         let wrap_max_lines_plus1 = adapt_wrap_max_lines_argument(opt.wrap_max_lines);
 
+        #[cfg(not(test))]
+        let cwd_of_delta_process = std::env::current_dir().ok();
+        #[cfg(test)]
+        let cwd_of_delta_process = Some(utils::path::fake_delta_cwd_for_tests());
+
+        let cwd_relative_to_repo_root = std::env::var("GIT_PREFIX").ok();
+
+        let cwd_of_user_shell_process = utils::path::cwd_of_user_shell_process(
+            cwd_of_delta_process.as_ref(),
+            cwd_relative_to_repo_root.as_deref(),
+        );
+
         Self {
             available_terminal_width: opt.computed.available_terminal_width,
             background_color_extends_to_terminal_width: opt
                 .computed
                 .background_color_extends_to_terminal_width,
             blame_format: opt.blame_format,
-            blame_code_style: styles.get("blame-code-style").copied(),
+            blame_code_style: styles.remove("blame-code-style"),
             blame_palette,
+            blame_separator_format: parse_blame_line_numbers(&opt.blame_separator_format),
+            blame_separator_style: styles.remove("blame-separator-style"),
             blame_timestamp_format: opt.blame_timestamp_format,
             commit_style: styles["commit-style"],
             color_only: opt.color_only,
             commit_regex,
-            cwd_relative_to_repo_root: std::env::var("GIT_PREFIX").ok(),
+            cwd_of_delta_process,
+            cwd_of_user_shell_process,
+            cwd_relative_to_repo_root,
             decorations_width: opt.computed.decorations_width,
             default_language: opt.default_language,
             diff_stat_align_width: opt.diff_stat_align_width,
@@ -258,6 +283,10 @@ impl From<cli::Opt> for Config {
             file_modified_label,
             file_removed_label,
             file_renamed_label,
+            file_regex_replacement: opt
+                .file_regex_replacement
+                .as_deref()
+                .and_then(RegexReplacement::from_sed_command),
             right_arrow,
             hunk_label,
             file_style: styles["file-style"],

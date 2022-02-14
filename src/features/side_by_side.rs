@@ -36,7 +36,7 @@ pub use MinusPlusIndex::Plus as Right;
 
 use super::line_numbers::LineNumbersData;
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct Panel {
     pub width: usize,
 }
@@ -597,18 +597,18 @@ pub mod tests {
 
     #[test]
     fn test_two_minus_lines() {
-        DeltaTest::with(&["--side-by-side", "--width", "40"])
+        DeltaTest::with_args(&["--side-by-side", "--width", "40"])
             .with_input(TWO_MINUS_LINES_DIFF)
-            .expect(
+            .expect_after_header(
                 r#"
-                │ 1  │a = 1         │    │
-                │ 2  │b = 23456     │    │"#,
+                │  1 │a = 1         │    │
+                │  2 │b = 23456     │    │"#,
             );
     }
 
     #[test]
     fn test_two_minus_lines_truncated() {
-        DeltaTest::with(&[
+        DeltaTest::with_args(&[
             "--side-by-side",
             "--wrap-max-lines",
             "0",
@@ -616,56 +616,56 @@ pub mod tests {
             "28",
             "--line-fill-method=spaces",
         ])
-        .set_cfg(|cfg| cfg.truncation_symbol = ">".into())
+        .set_config(|cfg| cfg.truncation_symbol = ">".into())
         .with_input(TWO_MINUS_LINES_DIFF)
-        .expect(
+        .expect_after_header(
             r#"
-            │ 1  │a = 1   │    │
-            │ 2  │b = 234>│    │"#,
+            │  1 │a = 1   │    │
+            │  2 │b = 234>│    │"#,
         );
     }
 
     #[test]
     fn test_two_plus_lines() {
-        DeltaTest::with(&[
+        DeltaTest::with_args(&[
             "--side-by-side",
             "--width",
             "41",
             "--line-fill-method=spaces",
         ])
         .with_input(TWO_PLUS_LINES_DIFF)
-        .expect(
+        .expect_after_header(
             r#"
-            │    │              │ 1  │a = 1         
-            │    │              │ 2  │b = 234567    "#,
+            │    │              │  1 │a = 1         
+            │    │              │  2 │b = 234567    "#,
         );
     }
 
     #[test]
     fn test_two_plus_lines_spaces_and_ansi() {
-        DeltaTest::with(&[
+        DeltaTest::with_args(&[
             "--side-by-side",
             "--width",
             "41",
             "--line-fill-method=spaces",
         ])
-        .with_input(TWO_PLUS_LINES_DIFF)
         .explain_ansi()
-        .expect(r#"
-        (blue)│(88)    (blue)│(normal)              (blue)│(28) 1  (blue)│(231 22)a (203)=(231) (141)1(normal 22)         (normal)
-        (blue)│(88)    (blue)│(normal)              (blue)│(28) 2  (blue)│(231 22)b (203)=(231) (141)234567(normal 22)    (normal)"#);
+        .with_input(TWO_PLUS_LINES_DIFF)
+        .expect_after_header(r#"
+        (blue)│(88)    (blue)│(normal)              (blue)│(28)  1 (blue)│(231 22)a (203)=(231) (141)1(normal 22)         (normal)
+        (blue)│(88)    (blue)│(normal)              (blue)│(28)  2 (blue)│(231 22)b (203)=(231) (141)234567(normal 22)    (normal)"#);
 
-        DeltaTest::with(&[
+        DeltaTest::with_args(&[
             "--side-by-side",
             "--width",
             "41",
             "--line-fill-method=ansi",
         ])
-        .with_input(TWO_PLUS_LINES_DIFF)
         .explain_ansi()
-        .expect(r#"
-        (blue)│(88)    (blue)│(normal)              (blue) │(28) 1  (blue)│(231 22)a (203)=(231) (141)1(normal)
-        (blue)│(88)    (blue)│(normal)              (blue) │(28) 2  (blue)│(231 22)b (203)=(231) (141)234567(normal)"#);
+        .with_input(TWO_PLUS_LINES_DIFF)
+        .expect_after_header(r#"
+        (blue)│(88)    (blue)│(normal)              (blue) │(28)  1 (blue)│(231 22)a (203)=(231) (141)1(normal)
+        (blue)│(88)    (blue)│(normal)              (blue) │(28)  2 (blue)│(231 22)b (203)=(231) (141)234567(normal)"#);
     }
 
     #[test]
@@ -683,8 +683,8 @@ pub mod tests {
         let output = run_delta(TWO_PLUS_LINES_DIFF, &config);
         let mut lines = output.lines().skip(crate::config::HEADER_LEN);
         let (line_1, line_2) = (lines.next().unwrap(), lines.next().unwrap());
-        assert_eq!("│    │         │ 1  │a = 1    ", strip_ansi_codes(line_1));
-        assert_eq!("│    │         │ 2  │b = 2345>", strip_ansi_codes(line_2));
+        assert_eq!("│    │         │  1 │a = 1    ", strip_ansi_codes(line_1));
+        assert_eq!("│    │         │  2 │b = 2345>", strip_ansi_codes(line_2));
     }
 
     #[test]
@@ -695,23 +695,23 @@ pub mod tests {
         let mut lines = output.lines().skip(crate::config::HEADER_LEN);
         let (line_1, line_2) = (lines.next().unwrap(), lines.next().unwrap());
         let sac = strip_ansi_codes; // alias to help with `cargo fmt`-ing:
-        assert_eq!("│    │           │ 1  │a = 1", sac(line_1));
-        assert_eq!("│    │           │ 2  │b = 234567", sac(line_2));
+        assert_eq!("│    │           │  1 │a = 1", sac(line_1));
+        assert_eq!("│    │           │  2 │b = 234567", sac(line_2));
     }
 
     #[test]
     fn test_one_minus_one_plus_line() {
-        DeltaTest::with(&[
+        DeltaTest::with_args(&[
             "--side-by-side",
             "--width",
             "40",
             "--line-fill-method=spaces",
         ])
         .with_input(ONE_MINUS_ONE_PLUS_LINE_DIFF)
-        .expect(
+        .expect_after_header(
             r#"
-            │ 1  │a = 1         │ 1  │a = 1
-            │ 2  │b = 2         │ 2  │bb = 2        "#,
+            │  1 │a = 1         │  1 │a = 1
+            │  2 │b = 2         │  2 │bb = 2        "#,
         );
     }
 }

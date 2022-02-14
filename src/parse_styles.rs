@@ -22,45 +22,10 @@ pub fn parse_styles(opt: &cli::Opt) -> HashMap<String, Style> {
     make_hunk_styles(opt, &mut styles);
     make_commit_file_hunk_header_styles(opt, &mut styles);
     make_line_number_styles(opt, &mut styles);
+    make_blame_styles(opt, &mut styles);
     make_grep_styles(opt, &mut styles);
     make_merge_conflict_styles(opt, &mut styles);
-
-    styles.insert(
-        "inline-hint-style",
-        style_from_str(
-            &opt.inline_hint_style,
-            None,
-            None,
-            opt.computed.true_color,
-            opt.git_config.as_ref(),
-        ),
-    );
-    styles.insert(
-        "git-minus-style",
-        StyleReference::Style(match opt.git_config_entries.get("color.diff.old") {
-            Some(GitConfigEntry::Style(s)) => Style::from_git_str(s),
-            _ => *style::GIT_DEFAULT_MINUS_STYLE,
-        }),
-    );
-    styles.insert(
-        "git-plus-style",
-        StyleReference::Style(match opt.git_config_entries.get("color.diff.new") {
-            Some(GitConfigEntry::Style(s)) => Style::from_git_str(s),
-            _ => *style::GIT_DEFAULT_PLUS_STYLE,
-        }),
-    );
-    if let Some(style_string) = &opt.blame_code_style {
-        styles.insert(
-            "blame-code-style",
-            style_from_str(
-                style_string,
-                None,
-                None,
-                opt.computed.true_color,
-                opt.git_config.as_ref(),
-            ),
-        );
-    };
+    make_misc_styles(opt, &mut styles);
 
     let mut resolved_styles = resolve_style_references(styles, opt);
     resolved_styles.get_mut("minus-emph-style").unwrap().is_emph = true;
@@ -345,55 +310,84 @@ fn make_line_number_styles(opt: &cli::Opt, styles: &mut HashMap<&str, StyleRefer
 fn make_commit_file_hunk_header_styles(opt: &cli::Opt, styles: &mut HashMap<&str, StyleReference>) {
     let true_color = opt.computed.true_color;
     styles.extend([
-        ("commit-style",
-            style_from_str_with_handling_of_special_decoration_attributes_and_respecting_deprecated_foreground_color_arg(
+        (
+            "commit-style",
+            style_from_str_with_handling_of_special_decoration_attributes(
                 &opt.commit_style,
                 None,
                 Some(&opt.commit_decoration_style),
-                opt.deprecated_commit_color.as_deref(),
                 true_color,
                 opt.git_config.as_ref(),
-            )
+            ),
         ),
-        ("file-style",
-            style_from_str_with_handling_of_special_decoration_attributes_and_respecting_deprecated_foreground_color_arg(
+        (
+            "file-style",
+            style_from_str_with_handling_of_special_decoration_attributes(
                 &opt.file_style,
                 None,
                 Some(&opt.file_decoration_style),
-                opt.deprecated_file_color.as_deref(),
                 true_color,
                 opt.git_config.as_ref(),
-            )
+            ),
         ),
-        ("hunk-header-style",
-            style_from_str_with_handling_of_special_decoration_attributes_and_respecting_deprecated_foreground_color_arg(
+        (
+            "hunk-header-style",
+            style_from_str_with_handling_of_special_decoration_attributes(
                 &opt.hunk_header_style,
                 None,
                 Some(&opt.hunk_header_decoration_style),
-                opt.deprecated_hunk_color.as_deref(),
                 true_color,
                 opt.git_config.as_ref(),
-            )
+            ),
         ),
-        ("hunk-header-file-style",
+        (
+            "hunk-header-file-style",
             style_from_str_with_handling_of_special_decoration_attributes(
                 &opt.hunk_header_file_style,
                 None,
                 None,
                 true_color,
                 opt.git_config.as_ref(),
-            )
+            ),
         ),
-        ("hunk-header-line-number-style",
+        (
+            "hunk-header-line-number-style",
             style_from_str_with_handling_of_special_decoration_attributes(
                 &opt.hunk_header_line_number_style,
                 None,
                 None,
                 true_color,
                 opt.git_config.as_ref(),
-            )
+            ),
         ),
     ]);
+}
+
+fn make_blame_styles(opt: &cli::Opt, styles: &mut HashMap<&str, StyleReference>) {
+    if let Some(style_string) = &opt.blame_code_style {
+        styles.insert(
+            "blame-code-style",
+            style_from_str(
+                style_string,
+                None,
+                None,
+                opt.computed.true_color,
+                opt.git_config.as_ref(),
+            ),
+        );
+    };
+    if let Some(style_string) = &opt.blame_separator_style {
+        styles.insert(
+            "blame-separator-style",
+            style_from_str(
+                style_string,
+                None,
+                None,
+                opt.computed.true_color,
+                opt.git_config.as_ref(),
+            ),
+        );
+    };
 }
 
 fn make_grep_styles(opt: &cli::Opt, styles: &mut HashMap<&str, StyleReference>) {
@@ -494,6 +488,33 @@ fn make_merge_conflict_styles(opt: &cli::Opt, styles: &mut HashMap<&str, StyleRe
     );
 }
 
+fn make_misc_styles(opt: &cli::Opt, styles: &mut HashMap<&str, StyleReference>) {
+    styles.insert(
+        "inline-hint-style",
+        style_from_str(
+            &opt.inline_hint_style,
+            None,
+            None,
+            opt.computed.true_color,
+            opt.git_config.as_ref(),
+        ),
+    );
+    styles.insert(
+        "git-minus-style",
+        StyleReference::Style(match opt.git_config_entries.get("color.diff.old") {
+            Some(GitConfigEntry::Style(s)) => Style::from_git_str(s),
+            _ => *style::GIT_DEFAULT_MINUS_STYLE,
+        }),
+    );
+    styles.insert(
+        "git-plus-style",
+        StyleReference::Style(match opt.git_config_entries.get("color.diff.new") {
+            Some(GitConfigEntry::Style(s)) => Style::from_git_str(s),
+            _ => *style::GIT_DEFAULT_PLUS_STYLE,
+        }),
+    );
+}
+
 fn style_from_str(
     style_string: &str,
     default: Option<Style>,
@@ -533,28 +554,6 @@ fn style_from_str_with_handling_of_special_decoration_attributes(
                 git_config,
             ),
         )
-    }
-}
-
-fn style_from_str_with_handling_of_special_decoration_attributes_and_respecting_deprecated_foreground_color_arg(
-    style_string: &str,
-    default: Option<Style>,
-    decoration_style_string: Option<&str>,
-    deprecated_foreground_color_arg: Option<&str>,
-    true_color: bool,
-    git_config: Option<&GitConfig>,
-) -> StyleReference {
-    if is_style_reference(style_string) {
-        StyleReference::Reference(style_string.to_owned())
-    } else {
-        StyleReference::Style(Style::from_str_with_handling_of_special_decoration_attributes_and_respecting_deprecated_foreground_color_arg(
-            style_string,
-            default,
-            decoration_style_string,
-            deprecated_foreground_color_arg,
-            true_color,
-            git_config,
-        ))
     }
 }
 

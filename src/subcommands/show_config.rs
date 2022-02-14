@@ -26,6 +26,8 @@ pub fn show_config(config: &config::Config, writer: &mut dyn Write) -> std::io::
     plus-non-emph-style           = {plus_non_emph_style}
     plus-emph-style               = {plus_emph_style}
     plus-empty-line-marker-style  = {plus_empty_line_marker_style}
+    grep-file-style               = {grep_file_style}
+    grep-line-number-style        = {grep_line_number_style}
     whitespace-error-style        = {whitespace_error_style}
     blame-palette                 = {blame_palette}",
         blame_palette = config
@@ -44,6 +46,8 @@ pub fn show_config(config: &config::Config, writer: &mut dyn Write) -> std::io::
         plus_empty_line_marker_style = config.plus_empty_line_marker_style.to_painted_string(),
         plus_non_emph_style = config.plus_non_emph_style.to_painted_string(),
         plus_style = config.plus_style.to_painted_string(),
+        grep_file_style = config.grep_file_style.to_painted_string(),
+        grep_line_number_style = config.grep_line_number_style.to_painted_string(),
         whitespace_error_style = config.whitespace_error_style.to_painted_string(),
         zero_style = config.zero_style.to_painted_string(),
     )?;
@@ -115,6 +119,7 @@ pub fn show_config(config: &config::Config, writer: &mut dyn Write) -> std::io::
         writer,
         "    max-line-distance             = {max_line_distance}
     max-line-length               = {max_line_length}
+    diff-stat-align-width         = {diff_stat_align_width}
     line-fill-method              = {line_fill_method}
     navigate                      = {navigate}
     navigate-regex                = {navigate_regex}
@@ -125,6 +130,7 @@ pub fn show_config(config: &config::Config, writer: &mut dyn Write) -> std::io::
     width                         = {width}
     tabs                          = {tab_width}
     word-diff-regex               = {tokenization_regex}",
+        diff_stat_align_width = config.diff_stat_align_width,
         max_line_distance = config.max_line_distance,
         max_line_length = config.max_line_length,
         line_fill_method = match config.line_fill_method {
@@ -134,7 +140,7 @@ pub fn show_config(config: &config::Config, writer: &mut dyn Write) -> std::io::
         navigate = config.navigate,
         navigate_regex = match &config.navigate_regex {
             None => "".to_string(),
-            Some(s) => format_option_value(s.to_string()),
+            Some(s) => format_option_value(s),
         },
         pager = config.pager.clone().unwrap_or_else(|| "none".to_string()),
         paging_mode = match config.paging_mode {

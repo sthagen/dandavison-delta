@@ -4,7 +4,6 @@ use std::result::Result;
 use std::str::FromStr;
 
 use console::Term;
-use structopt::clap;
 
 use crate::cli;
 use crate::config;
@@ -25,7 +24,7 @@ macro_rules! set_options {
         $(
             let kebab_case_field_name = stringify!($field_ident).replace("_", "-");
             let option_name = $expected_option_name_map[kebab_case_field_name.as_str()];
-            if !$crate::config::user_supplied_option(&option_name, $arg_matches) {
+            if !$crate::config::user_supplied_option(&kebab_case_field_name, $arg_matches) {
                 if let Some(value) = $crate::options::get::get_option_value(
                     option_name,
                     &$builtin_features,
@@ -45,11 +44,13 @@ macro_rules! set_options {
                 "diff-highlight", // Does not exist as a flag on config
                 "diff-so-fancy", // Does not exist as a flag on config
                 "features",  // Processed differently
+                "help", // automatically added by clap
                 // Set prior to the rest
                 "no-gitconfig",
                 "dark",
                 "light",
                 "syntax-theme",
+                "version", // automatically added by clap
             ]);
             let expected_option_names: HashSet<_> = $expected_option_name_map.values().cloned().collect();
 
@@ -80,7 +81,7 @@ pub fn set_options(
         opt.syntax_theme = env::get_env_var("BAT_THEME")
     }
 
-    let option_names = cli::Opt::get_option_names();
+    let option_names = cli::Opt::get_argument_and_option_names();
 
     // Set features
     let mut builtin_features = features::make_builtin_features();
@@ -127,7 +128,9 @@ pub fn set_options(
         [
             blame_code_style,
             blame_format,
+            blame_separator_format,
             blame_palette,
+            blame_separator_style,
             blame_timestamp_format,
             color_only,
             commit_decoration_style,
@@ -141,6 +144,7 @@ pub fn set_options(
             file_modified_label,
             file_removed_label,
             file_renamed_label,
+            file_regex_replacement,
             right_arrow,
             hunk_label,
             file_style,
@@ -664,15 +668,6 @@ fn set_git_config_entries(opt: &mut cli::Opt, git_config: &mut GitConfig) {
                 .insert(key.to_string(), GitConfigEntry::Style(style_string));
         }
     }
-
-    if let Some(repo) = &git_config.repo {
-        if let Some(workdir) = repo.workdir() {
-            opt.git_config_entries.insert(
-                "delta.__workdir__".to_string(),
-                GitConfigEntry::Path(workdir.to_path_buf()),
-            );
-        }
-    }
 }
 
 #[cfg(test)]
@@ -702,6 +697,7 @@ pub mod tests {
     file-modified-label = xxxyyyzzz
     file-removed-label = xxxyyyzzz
     file-renamed-label = xxxyyyzzz
+    file-transformation = s/foo/bar/
     right-arrow = xxxyyyzzz
     file-style = black black
     hunk-header-decoration-style = black black
@@ -769,6 +765,7 @@ pub mod tests {
         assert_eq!(opt.file_renamed_label, "xxxyyyzzz");
         assert_eq!(opt.right_arrow, "xxxyyyzzz");
         assert_eq!(opt.file_style, "black black");
+        assert_eq!(opt.file_regex_replacement, Some("s/foo/bar/".to_string()));
         assert_eq!(opt.hunk_header_decoration_style, "black black");
         assert_eq!(opt.hunk_header_style, "black black");
         assert_eq!(opt.keep_plus_minus_markers, true);

@@ -27,13 +27,11 @@ lazy_static! {
 }
 
 fn compute_is_word_diff() -> bool {
-    match process::calling_process().as_deref() {
-        Some(
-            CallingProcess::GitDiff(cmd_line)
-            | CallingProcess::GitShow(cmd_line, _)
-            | CallingProcess::GitLog(cmd_line)
-            | CallingProcess::GitReflog(cmd_line),
-        ) => {
+    match &*process::calling_process() {
+        CallingProcess::GitDiff(cmd_line)
+        | CallingProcess::GitShow(cmd_line, _)
+        | CallingProcess::GitLog(cmd_line)
+        | CallingProcess::GitReflog(cmd_line) => {
             cmd_line.long_options.contains("--word-diff")
                 || cmd_line.long_options.contains("--word-diff-regex")
                 || cmd_line.long_options.contains("--color-words")
@@ -283,11 +281,11 @@ mod tests {
 
         #[test]
         fn test_word_diff() {
-            DeltaTest::with(&[])
+            DeltaTest::with_args(&[])
                 .with_calling_process("git diff --word-diff")
-                .with_input(GIT_DIFF_WORD_DIFF)
                 .explain_ansi()
-                .expect_skip(
+                .with_input(GIT_DIFF_WORD_DIFF)
+                .expect_after_skip(
                     11,
                     "
 #indent_mark
@@ -301,11 +299,11 @@ mod tests {
 
         #[test]
         fn test_color_words() {
-            DeltaTest::with(&[])
+            DeltaTest::with_args(&[])
                 .with_calling_process("git diff --color-words")
-                .with_input(GIT_DIFF_COLOR_WORDS)
                 .explain_ansi()
-                .expect_skip(
+                .with_input(GIT_DIFF_COLOR_WORDS)
+                .expect_after_skip(
                     11,
                     "
 #indent_mark
@@ -320,15 +318,15 @@ mod tests {
         #[test]
         #[ignore] // FIXME
         fn test_color_words_map_styles() {
-            DeltaTest::with(&[
+            DeltaTest::with_args(&[
                 "--map-styles",
                 "red => bold yellow #dddddd, green => bold blue #dddddd",
             ])
             .with_calling_process("git diff --color-words")
-            .with_input(GIT_DIFF_COLOR_WORDS)
             .explain_ansi()
+            .with_input(GIT_DIFF_COLOR_WORDS)
             .inspect()
-            .expect_skip(
+            .expect_after_skip(
                 11,
                 r##"
 #indent_mark
@@ -342,10 +340,10 @@ mod tests {
 
         #[test]
         fn test_hunk_line_style_raw() {
-            DeltaTest::with(&["--minus-style", "raw", "--plus-style", "raw"])
-                .with_input(GIT_DIFF_WITH_COLOR)
+            DeltaTest::with_args(&["--minus-style", "raw", "--plus-style", "raw"])
                 .explain_ansi()
-                .expect_skip(
+                .with_input(GIT_DIFF_WITH_COLOR)
+                .expect_after_skip(
                     14,
                     "
 (red)aaa(normal)
@@ -356,7 +354,7 @@ mod tests {
 
         #[test]
         fn test_hunk_line_style_raw_map_styles() {
-            DeltaTest::with(&[
+            DeltaTest::with_args(&[
                 "--minus-style",
                 "raw",
                 "--plus-style",
@@ -364,9 +362,9 @@ mod tests {
                 "--map-styles",
                 "red => bold blue, green => dim yellow",
             ])
-            .with_input(GIT_DIFF_WITH_COLOR)
             .explain_ansi()
-            .expect_skip(
+            .with_input(GIT_DIFF_WITH_COLOR)
+            .expect_after_skip(
                 14,
                 "
 (bold blue)aaa(normal)

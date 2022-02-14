@@ -6,8 +6,8 @@ use unicode_segmentation::UnicodeSegmentation;
 use super::draw;
 use crate::config::Config;
 use crate::delta::{DiffType, Source, State, StateMachine};
-use crate::features;
 use crate::paint::Painter;
+use crate::{features, utils};
 
 // https://git-scm.com/docs/git-config#Documentation/git-config.txt-diffmnemonicPrefix
 const DIFF_PREFIXES: [&str; 6] = ["a/", "b/", "c/", "i/", "o/", "w/"];
@@ -17,43 +17,59 @@ pub enum FileEvent {
     Change,
     Copy,
     Rename,
-    ModeChange(String),
     NoEvent,
 }
 
 impl<'a> StateMachine<'a> {
+    /// Check for the old mode|new mode lines and cache their info for later use.
+    pub fn handle_diff_header_mode_line(&mut self) -> std::io::Result<bool> {
+        let mut handled_line = false;
+        if let Some(line_suf) = self.line.strip_prefix("old mode ") {
+            self.state = State::DiffHeader(DiffType::Unified);
+            if self.should_handle() && !self.config.color_only {
+                self.mode_info = line_suf.to_string();
+                handled_line = true;
+            }
+        } else if let Some(line_suf) = self.line.strip_prefix("new mode ") {
+            self.state = State::DiffHeader(DiffType::Unified);
+            if self.should_handle() && !self.config.color_only && !self.mode_info.is_empty() {
+                self.mode_info = match (self.mode_info.as_str(), line_suf) {
+                    // 100755 for executable and 100644 for non-executable are the only file modes Git records.
+                    // https://medium.com/@tahteche/how-git-treats-changes-in-file-permissions-f71874ca239d
+                    ("100644", "100755") => "mode +x".to_string(),
+                    ("100755", "100644") => "mode -x".to_string(),
+                    _ => format!(
+                        "mode {} {} {}",
+                        self.mode_info, self.config.right_arrow, line_suf
+                    ),
+                };
+                handled_line = true;
+            }
+        }
+        Ok(handled_line)
+    }
+
     #[inline]
     fn test_diff_header_minus_line(&self) -> bool {
         (matches!(self.state, State::DiffHeader(_)) || self.source == Source::DiffUnified)
             && (self.line.starts_with("--- ")
                 || self.line.starts_with("rename from ")
-                || self.line.starts_with("copy from ")
-                || self.line.starts_with("old mode "))
+                || self.line.starts_with("copy from "))
     }
 
+    /// Check for and handle the "--- filename ..." line.
     pub fn handle_diff_header_minus_line(&mut self) -> std::io::Result<bool> {
         if !self.test_diff_header_minus_line() {
             return Ok(false);
         }
         let mut handled_line = false;
 
-        let (path_or_mode, file_event) = parse_diff_header_line(
-            &self.line,
-            self.source == Source::GitDiff,
-            if self.config.relative_paths {
-                self.config.cwd_relative_to_repo_root.as_deref()
-            } else {
-                None
-            },
-        );
-        // In the case of ModeChange only, the file path is taken from the diff
-        // --git line (since that is the only place the file path occurs);
-        // otherwise it is taken from the --- / +++ line.
-        self.minus_file = if let FileEvent::ModeChange(_) = &file_event {
-            get_repeated_file_path_from_diff_line(&self.diff_line).unwrap_or(path_or_mode)
-        } else {
-            path_or_mode
-        };
+        let (path_or_mode, file_event) =
+            parse_diff_header_line(&self.line, self.source == Source::GitDiff);
+
+        self.minus_file = utils::path::relativize_path_maybe(&path_or_mode, self.config)
+            .map(|p| p.to_string_lossy().to_owned().to_string())
+            .unwrap_or(path_or_mode);
         self.minus_file_event = file_event;
 
         if self.source == Source::DiffUnified {
@@ -76,6 +92,7 @@ impl<'a> StateMachine<'a> {
                 &self.line,
                 &self.raw_line,
                 &mut self.painter,
+                &mut self.mode_info,
                 self.config,
             )?;
             handled_line = true;
@@ -88,32 +105,21 @@ impl<'a> StateMachine<'a> {
         (matches!(self.state, State::DiffHeader(_)) || self.source == Source::DiffUnified)
             && (self.line.starts_with("+++ ")
                 || self.line.starts_with("rename to ")
-                || self.line.starts_with("copy to ")
-                || self.line.starts_with("new mode "))
+                || self.line.starts_with("copy to "))
     }
 
+    /// Check for and handle the "+++ filename ..." line.
     pub fn handle_diff_header_plus_line(&mut self) -> std::io::Result<bool> {
         if !self.test_diff_header_plus_line() {
             return Ok(false);
         }
         let mut handled_line = false;
-        let (path_or_mode, file_event) = parse_diff_header_line(
-            &self.line,
-            self.source == Source::GitDiff,
-            if self.config.relative_paths {
-                self.config.cwd_relative_to_repo_root.as_deref()
-            } else {
-                None
-            },
-        );
-        // In the case of ModeChange only, the file path is taken from the diff
-        // --git line (since that is the only place the file path occurs);
-        // otherwise it is taken from the --- / +++ line.
-        self.plus_file = if let FileEvent::ModeChange(_) = &file_event {
-            get_repeated_file_path_from_diff_line(&self.diff_line).unwrap_or(path_or_mode)
-        } else {
-            path_or_mode
-        };
+        let (path_or_mode, file_event) =
+            parse_diff_header_line(&self.line, self.source == Source::GitDiff);
+
+        self.plus_file = utils::path::relativize_path_maybe(&path_or_mode, self.config)
+            .map(|p| p.to_string_lossy().to_owned().to_string())
+            .unwrap_or(path_or_mode);
         self.plus_file_event = file_event;
         self.painter
             .set_syntax(get_file_extension_from_diff_header_line_file_path(
@@ -130,6 +136,7 @@ impl<'a> StateMachine<'a> {
                 &self.line,
                 &self.raw_line,
                 &mut self.painter,
+                &mut self.mode_info,
                 self.config,
             )?;
             handled_line = true
@@ -154,7 +161,50 @@ impl<'a> StateMachine<'a> {
             self.config,
         );
         // FIXME: no support for 'raw'
-        write_generic_diff_header_header_line(&line, &line, &mut self.painter, self.config)
+        write_generic_diff_header_header_line(
+            &line,
+            &line,
+            &mut self.painter,
+            &mut self.mode_info,
+            self.config,
+        )
+    }
+
+    pub fn handle_pending_mode_line_with_diff_name(&mut self) -> std::io::Result<()> {
+        if !self.mode_info.is_empty() {
+            let format_label = |label: &str| {
+                if !label.is_empty() {
+                    format!("{} ", label)
+                } else {
+                    "".to_string()
+                }
+            };
+            let format_file = |file| match (
+                self.config.hyperlinks,
+                utils::path::absolute_path(file, self.config),
+            ) {
+                (true, Some(absolute_path)) => features::hyperlinks::format_osc8_file_hyperlink(
+                    absolute_path,
+                    None,
+                    file,
+                    self.config,
+                ),
+                _ => Cow::from(file),
+            };
+            let label = format_label(&self.config.file_modified_label);
+            let name = get_repeated_file_path_from_diff_line(&self.diff_line)
+                .unwrap_or_else(|| "".to_string());
+            let line = format!("{}{}", label, format_file(&name));
+            write_generic_diff_header_header_line(
+                &line,
+                &line,
+                &mut self.painter,
+                &mut self.mode_info,
+                self.config,
+            )
+        } else {
+            Ok(())
+        }
     }
 }
 
@@ -163,6 +213,7 @@ pub fn write_generic_diff_header_header_line(
     line: &str,
     raw_line: &str,
     painter: &mut Painter,
+    mode_info: &mut String,
     config: &Config,
 ) -> std::io::Result<()> {
     // If file_style is "omit", we'll skip the process and print nothing.
@@ -181,10 +232,14 @@ pub fn write_generic_diff_header_header_line(
         painter.writer,
         &format!("{}{}", line, if pad { " " } else { "" }),
         &format!("{}{}", raw_line, if pad { " " } else { "" }),
+        mode_info,
         &config.decorations_width,
         config.file_style,
         decoration_ansi_term_style,
     )?;
+    if !mode_info.is_empty() {
+        mode_info.truncate(0);
+    }
     Ok(())
 }
 
@@ -216,12 +271,8 @@ pub fn get_extension(s: &str) -> Option<&str> {
         .or_else(|| path.file_name().and_then(|s| s.to_str()))
 }
 
-fn parse_diff_header_line(
-    line: &str,
-    git_diff_name: bool,
-    relative_path_base: Option<&str>,
-) -> (String, FileEvent) {
-    let (mut path_or_mode, file_event) = match line {
+fn parse_diff_header_line(line: &str, git_diff_name: bool) -> (String, FileEvent) {
+    match line {
         line if line.starts_with("--- ") || line.starts_with("+++ ") => {
             let offset = 4;
             let file = _parse_file_path(&line[offset..], git_diff_name);
@@ -239,25 +290,8 @@ fn parse_diff_header_line(
         line if line.starts_with("copy to ") => {
             (line[8..].to_string(), FileEvent::Copy) // "copy to ".len()
         }
-        line if line.starts_with("old mode ") => {
-            ("".to_string(), FileEvent::ModeChange(line[9..].to_string())) // "old mode ".len()
-        }
-        line if line.starts_with("new mode ") => {
-            ("".to_string(), FileEvent::ModeChange(line[9..].to_string())) // "new mode ".len()
-        }
         _ => ("".to_string(), FileEvent::NoEvent),
-    };
-
-    if let Some(base) = relative_path_base {
-        if let FileEvent::ModeChange(_) = file_event {
-        } else if let Some(relative_path) = pathdiff::diff_paths(&path_or_mode, base) {
-            if let Some(relative_path) = relative_path.to_str() {
-                path_or_mode = relative_path.to_owned();
-            }
-        }
     }
-
-    (path_or_mode, file_event)
 }
 
 /// Given input like "diff --git a/src/my file.rs b/src/my file.rs"
@@ -318,29 +352,14 @@ pub fn get_file_change_description_from_file_paths(
             plus_file
         )
     } else {
-        let format_file = |file| {
-            if config.hyperlinks {
-                features::hyperlinks::format_osc8_file_hyperlink(file, None, file, config)
-            } else {
-                Cow::from(file)
+        let format_file = |file| match (config.hyperlinks, utils::path::absolute_path(file, config))
+        {
+            (true, Some(absolute_path)) => {
+                features::hyperlinks::format_osc8_file_hyperlink(absolute_path, None, file, config)
             }
+            _ => Cow::from(file),
         };
         match (minus_file, plus_file, minus_file_event, plus_file_event) {
-            (
-                minus_file,
-                plus_file,
-                FileEvent::ModeChange(old_mode),
-                FileEvent::ModeChange(new_mode),
-            ) if minus_file == plus_file => match (old_mode.as_str(), new_mode.as_str()) {
-                // 100755 for executable and 100644 for non-executable are the only file modes Git records.
-                // https://medium.com/@tahteche/how-git-treats-changes-in-file-permissions-f71874ca239d
-                ("100644", "100755") => format!("{}: mode +x", plus_file),
-                ("100755", "100644") => format!("{}: mode -x", plus_file),
-                _ => format!(
-                    "{}: {} {} {}",
-                    plus_file, old_mode, config.right_arrow, new_mode
-                ),
-            },
             (minus_file, plus_file, _, _) if minus_file == plus_file => format!(
                 "{}{}",
                 format_label(&config.file_modified_label),
@@ -356,8 +375,7 @@ pub fn get_file_change_description_from_file_paths(
                 format_label(&config.file_added_label),
                 format_file(plus_file)
             ),
-            // minus_file_event == plus_file_event, except in the ModeChange
-            // case above.
+            // minus_file_event == plus_file_event
             (minus_file, plus_file, file_event, _) => format!(
                 "{}{} {} {}",
                 format_label(match file_event {
@@ -444,21 +462,21 @@ mod tests {
     #[test]
     fn test_get_file_path_from_git_diff_header_line() {
         assert_eq!(
-            parse_diff_header_line("--- /dev/null", true, None),
+            parse_diff_header_line("--- /dev/null", true),
             ("/dev/null".to_string(), FileEvent::Change)
         );
         for prefix in &DIFF_PREFIXES {
             assert_eq!(
-                parse_diff_header_line(&format!("--- {}src/delta.rs", prefix), true, None),
+                parse_diff_header_line(&format!("--- {}src/delta.rs", prefix), true),
                 ("src/delta.rs".to_string(), FileEvent::Change)
             );
         }
         assert_eq!(
-            parse_diff_header_line("--- src/delta.rs", true, None),
+            parse_diff_header_line("--- src/delta.rs", true),
             ("src/delta.rs".to_string(), FileEvent::Change)
         );
         assert_eq!(
-            parse_diff_header_line("+++ src/delta.rs", true, None),
+            parse_diff_header_line("+++ src/delta.rs", true),
             ("src/delta.rs".to_string(), FileEvent::Change)
         );
     }
@@ -466,23 +484,23 @@ mod tests {
     #[test]
     fn test_get_file_path_from_git_diff_header_line_containing_spaces() {
         assert_eq!(
-            parse_diff_header_line("+++ a/my src/delta.rs", true, None),
+            parse_diff_header_line("+++ a/my src/delta.rs", true),
             ("my src/delta.rs".to_string(), FileEvent::Change)
         );
         assert_eq!(
-            parse_diff_header_line("+++ my src/delta.rs", true, None),
+            parse_diff_header_line("+++ my src/delta.rs", true),
             ("my src/delta.rs".to_string(), FileEvent::Change)
         );
         assert_eq!(
-            parse_diff_header_line("+++ a/src/my delta.rs", true, None),
+            parse_diff_header_line("+++ a/src/my delta.rs", true),
             ("src/my delta.rs".to_string(), FileEvent::Change)
         );
         assert_eq!(
-            parse_diff_header_line("+++ a/my src/my delta.rs", true, None),
+            parse_diff_header_line("+++ a/my src/my delta.rs", true),
             ("my src/my delta.rs".to_string(), FileEvent::Change)
         );
         assert_eq!(
-            parse_diff_header_line("+++ b/my src/my enough/my delta.rs", true, None),
+            parse_diff_header_line("+++ b/my src/my enough/my delta.rs", true),
             (
                 "my src/my enough/my delta.rs".to_string(),
                 FileEvent::Change
@@ -493,7 +511,7 @@ mod tests {
     #[test]
     fn test_get_file_path_from_git_diff_header_line_rename() {
         assert_eq!(
-            parse_diff_header_line("rename from nospace/file2.el", true, None),
+            parse_diff_header_line("rename from nospace/file2.el", true),
             ("nospace/file2.el".to_string(), FileEvent::Rename)
         );
     }
@@ -501,7 +519,7 @@ mod tests {
     #[test]
     fn test_get_file_path_from_git_diff_header_line_rename_containing_spaces() {
         assert_eq!(
-            parse_diff_header_line("rename from with space/file1.el", true, None),
+            parse_diff_header_line("rename from with space/file1.el", true),
             ("with space/file1.el".to_string(), FileEvent::Rename)
         );
     }
@@ -509,11 +527,11 @@ mod tests {
     #[test]
     fn test_parse_diff_header_line() {
         assert_eq!(
-            parse_diff_header_line("--- src/delta.rs", false, None),
+            parse_diff_header_line("--- src/delta.rs", false),
             ("src/delta.rs".to_string(), FileEvent::Change)
         );
         assert_eq!(
-            parse_diff_header_line("+++ src/delta.rs", false, None),
+            parse_diff_header_line("+++ src/delta.rs", false),
             ("src/delta.rs".to_string(), FileEvent::Change)
         );
     }
@@ -537,8 +555,9 @@ mod tests {
             None
         );
         assert_eq!(
-        get_repeated_file_path_from_diff_line("diff --git a/.config/Code - Insiders/User/settings.json b/.config/Code - Insiders/User/settings.json"),
-        Some(".config/Code - Insiders/User/settings.json".to_string())
-    );
+            get_repeated_file_path_from_diff_line(
+                "diff --git a/.config/Code - Insiders/User/settings.json b/.config/Code - Insiders/User/settings.json"),
+            Some(".config/Code - Insiders/User/settings.json".to_string())
+        );
     }
 }
