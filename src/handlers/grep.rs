@@ -58,7 +58,7 @@ impl<'a> StateMachine<'a> {
                 // Emit syntax-highlighted code
                 // TODO: Determine the language less frequently, e.g. only when the file changes.
                 if let Some(lang) = handlers::diff_header::get_extension(&grep_line.path)
-                    .or_else(|| self.config.default_language.as_deref())
+                    .or(self.config.default_language.as_deref())
                 {
                     self.painter.set_syntax(Some(lang));
                     self.painter.set_highlighter();
@@ -345,7 +345,7 @@ fn make_grep_line_regex(regex_variant: GrepLineRegex) -> Regex {
         (                        # 1. file name (colons not allowed)
             [^:|\ ]                 # try to be strict about what a file path can start with
             [^:]*                   # anything
-            [^\ ]\.[^.\ :=-]{1,6}   # extension
+            [^\ ]\.[^.\ :=-]{1,10}   # extension
         )    
         "
         }
@@ -650,6 +650,24 @@ mod tests {
                 line_number: Some(4),
                 line_type: LineType::Match,
                 code: "repo=$(mktemp -d)".into(),
+                submatches: None,
+            })
+        );
+    }
+
+    #[test]
+    fn test_parse_grep_n_match_directory_name_with_dashes() {
+        let fake_parent_grep_command =
+            "/usr/local/bin/git --doesnt-matter grep --nor-this nor_this -- nor_this";
+        let _args = FakeParentArgs::once(fake_parent_grep_command);
+
+        assert_eq!(
+            parse_grep_line("etc/META-INF/foo.properties:4:value=hi-there"),
+            Some(GrepLine {
+                path: "etc/META-INF/foo.properties".into(),
+                line_number: Some(4),
+                line_type: LineType::Match,
+                code: "value=hi-there".into(),
                 submatches: None,
             })
         );

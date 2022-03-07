@@ -2,6 +2,7 @@ use std::collections::{HashMap, HashSet};
 use std::ffi::OsString;
 use std::path::PathBuf;
 
+use bat::assets::HighlightingAssets;
 use clap::{AppSettings, ColorChoice, FromArgMatches, IntoApp, Parser};
 use lazy_static::lazy_static;
 use syntect::highlighting::Theme as SyntaxTheme;
@@ -10,7 +11,7 @@ use syntect::parsing::SyntaxSet;
 use crate::config::delta_unreachable;
 use crate::git_config::{GitConfig, GitConfigEntry};
 use crate::options;
-use crate::utils::bat::assets::HighlightingAssets;
+use crate::utils;
 use crate::utils::bat::output::PagingMode;
 
 #[derive(Parser)]
@@ -337,7 +338,7 @@ pub struct Opt {
         default_value = "added:",
         value_name = "STRING"
     )]
-    /// Text to display in front of an added file path.
+    /// Text to display before an added file path.
     ///
     /// Used in the default value of navigate-regex.
     pub file_added_label: String,
@@ -347,7 +348,7 @@ pub struct Opt {
         default_value = "copied:",
         value_name = "STRING"
     )]
-    /// Text to display in front of a copied file path.
+    /// Text to display before a copied file path.
     pub file_copied_label: String,
 
     #[clap(
@@ -366,7 +367,7 @@ pub struct Opt {
         default_value = "",
         value_name = "STRING"
     )]
-    /// Text to display in front of a modified file path.
+    /// Text to display before a modified file path.
     ///
     /// Used in the default value of navigate-regex.
     pub file_modified_label: String,
@@ -376,7 +377,7 @@ pub struct Opt {
         default_value = "removed:",
         value_name = "STRING"
     )]
-    /// Text to display in front of a removed file path.
+    /// Text to display before a removed file path.
     ///
     /// Used in the default value of navigate-regex.
     pub file_removed_label: String,
@@ -386,7 +387,7 @@ pub struct Opt {
         default_value = "renamed:",
         value_name = "STRING"
     )]
-    /// Text to display in front of a renamed file path.
+    /// Text to display before a renamed file path.
     ///
     /// Used in the default value of navigate-regex.
     pub file_renamed_label: String,
@@ -489,7 +490,7 @@ pub struct Opt {
     pub hunk_header_style: String,
 
     #[clap(long = "hunk-label", default_value = "", value_name = "STRING")]
-    /// Text to display in front of a hunk header.
+    /// Text to display before a hunk header.
     ///
     /// Used in the default value of navigate-regex.
     pub hunk_label: String,
@@ -1029,7 +1030,7 @@ pub struct Opt {
     )]
     /// Pre-wrapped content symbol (right-aligned).
     ///
-    /// Symbol displayed in front of right-aligned wrapped content.
+    /// Symbol displayed before right-aligned wrapped content.
     pub wrap_right_prefix_symbol: String,
 
     #[clap(long = "wrap-right-symbol", default_value = "↴", value_name = "STRING")]
@@ -1130,7 +1131,7 @@ impl Opt {
         I: IntoIterator,
         I::Item: Into<OsString> + Clone,
     {
-        let assets = HighlightingAssets::new();
+        let assets = utils::bat::assets::load_highlighting_assets();
         Self::from_clap_and_git_config(Self::into_app().get_matches_from(iter), git_config, assets)
     }
 

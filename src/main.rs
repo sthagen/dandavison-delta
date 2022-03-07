@@ -35,7 +35,7 @@ use std::process;
 use bytelines::ByteLinesReader;
 
 use crate::delta::delta;
-use crate::utils::bat::assets::{list_languages, HighlightingAssets};
+use crate::utils::bat::assets::list_languages;
 use crate::utils::bat::output::OutputType;
 
 pub fn fatal<T>(errmsg: T) -> !
@@ -85,7 +85,7 @@ fn main() -> std::io::Result<()> {
 // report that two files differ when delta is called with two positional
 // arguments and without standard input; 2 is used to report a real problem.
 fn run_app() -> std::io::Result<i32> {
-    let assets = HighlightingAssets::new();
+    let assets = utils::bat::assets::load_highlighting_assets();
     let opt = cli::Opt::from_args_and_git_config(git_config::GitConfig::try_create(), assets);
 
     let subcommand_result = if opt.list_languages {
@@ -131,14 +131,21 @@ fn run_app() -> std::io::Result<i32> {
         OutputType::from_mode(config.paging_mode, config.pager.clone(), &config).unwrap();
     let mut writer = output_type.handle().unwrap();
 
-    if atty::is(atty::Stream::Stdin) {
-        let exit_code = subcommands::diff::diff(
-            config.minus_file.as_ref(),
-            config.plus_file.as_ref(),
-            &config,
-            &mut writer,
-        );
-        return Ok(exit_code);
+    match (config.minus_file.as_ref(), config.plus_file.as_ref()) {
+        (None, None) => {}
+        (Some(minus_file), Some(plus_file)) => {
+            let exit_code = subcommands::diff::diff(minus_file, plus_file, &config, &mut writer);
+            return Ok(exit_code);
+        }
+        _ => {
+            eprintln!(
+                "\
+    The main way to use delta is to configure it as the pager for git: \
+    see https://github.com/dandavison/delta#configuration. \
+    You can also use delta to diff two files: `delta file_A file_B`."
+            );
+            return Ok(config.error_exit_code);
+        }
     }
 
     if let Err(error) = delta(io::stdin().lock().byte_lines(), &mut writer, &config) {
