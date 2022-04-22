@@ -17,7 +17,6 @@ mod tests {
     }
 
     #[test]
-    #[ignore] // #128
     fn test_added_empty_file() {
         DeltaTest::with_args(&[])
             .with_input(ADDED_EMPTY_FILE)
@@ -133,6 +132,15 @@ mod tests {
             lines.nth(4).unwrap(),
             "Δ a/more_difference ⟶   b/more_difference"
         );
+    }
+
+    #[test]
+    fn test_diff_unified_concatenated() {
+        // See #1002. Line buffers were not being flushed correctly, leading to material from first
+        // file last hunk appearing at beginning of second file first hunk.
+        DeltaTest::with_args(&[])
+            .with_input(DIFF_UNIFIED_CONCATENATED)
+            .expect_contains("\nLINES.\n\n1/y 2022-03-06");
     }
 
     #[test]
@@ -1562,6 +1570,21 @@ src/align.rs:71: impl<'a> Alignment<'a> { │
     }
 
     #[test]
+    fn test_file_deleted_without_preimage() {
+        DeltaTest::with_args(&[])
+            .with_input(GIT_DIFF_FILE_DELETED_WITHOUT_PREIMAGE)
+            .expect_contains("removed: foo.bar");
+    }
+
+    #[test]
+    fn test_files_deleted_without_preimage() {
+        DeltaTest::with_args(&[])
+            .with_input(GIT_DIFF_FILES_DELETED_WITHOUT_PREIMAGE)
+            .expect_contains("removed: foo")
+            .expect_contains("removed: bar");
+    }
+
+    #[test]
     fn test_file_mode_change_with_diff() {
         DeltaTest::with_args(&["--navigate", "--keep-plus-minus-markers"])
             .with_input(GIT_DIFF_FILE_MODE_CHANGE_WITH_DIFF)
@@ -1873,6 +1896,27 @@ Only in b/: just_b
  with a name that start with 'm' making it come after the 'Only in'
 -This is different from b
 +This is different from a
+";
+
+    const DIFF_UNIFIED_CONCATENATED: &str = "\
+--- 1/x 2022-03-06 11:16:06.313403500 -0800
++++ 2/x 2022-03-06 11:18:14.083403500 -0800
+@@ -1,5 +1,5 @@
+ This
+-is
++IS
+ a
+ few
+-lines.
++LINES.
+--- 1/y 2022-03-06 11:16:44.483403500 -0800
++++ 2/y 2022-03-06 11:16:55.213403500 -0800
+@@ -1,4 +1,4 @@
+ This
+ is
+-another
++ANOTHER
+ test.
 ";
 
     const NOT_A_DIFF_OUTPUT: &str = "\
@@ -2302,6 +2346,23 @@ new mode 100644
 diff --git a/src/delta.rs b/src/delta.rs
 old mode 100700
 new mode 100644
+";
+
+    // This output can be generated with `git diff -D`
+    const GIT_DIFF_FILE_DELETED_WITHOUT_PREIMAGE: &str = "
+diff --git a/foo.bar b/foo.bar
+deleted file mode 100644
+index e019be0..0000000
+";
+
+    // This output can be generated with `git diff -D`
+    const GIT_DIFF_FILES_DELETED_WITHOUT_PREIMAGE: &str = "
+diff --git a/foo b/foo
+deleted file mode 100644
+index e019be0..0000000
+diff --git a/bar b/bar
+deleted file mode 100644
+index e019be0..0000000
 ";
 
     const GIT_DIFF_FILE_MODE_CHANGE_WITH_DIFF: &str = "
