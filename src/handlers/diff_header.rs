@@ -88,7 +88,7 @@ impl<'a> StateMachine<'a> {
             parse_diff_header_line(&self.line, self.source == Source::GitDiff);
 
         self.minus_file = utils::path::relativize_path_maybe(&path_or_mode, self.config)
-            .map(|p| p.to_string_lossy().to_owned().to_string())
+            .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or(path_or_mode);
         self.minus_file_event = file_event;
 
@@ -125,7 +125,7 @@ impl<'a> StateMachine<'a> {
             parse_diff_header_line(&self.line, self.source == Source::GitDiff);
 
         self.plus_file = utils::path::relativize_path_maybe(&path_or_mode, self.config)
-            .map(|p| p.to_string_lossy().to_owned().to_string())
+            .map(|p| p.to_string_lossy().into_owned())
             .unwrap_or(path_or_mode);
         self.plus_file_event = file_event;
         self.painter
@@ -162,8 +162,7 @@ impl<'a> StateMachine<'a> {
         let mut handled_line = false;
         let (_mode_info, file_event) =
             parse_diff_header_line(&self.line, self.source == Source::GitDiff);
-        let name = get_repeated_file_path_from_diff_line(&self.diff_line)
-            .unwrap_or_else(|| "".to_string());
+        let name = get_repeated_file_path_from_diff_line(&self.diff_line).unwrap_or_default();
         match file_event {
             FileEvent::Removed => {
                 self.minus_file = name;
@@ -242,8 +241,7 @@ impl<'a> StateMachine<'a> {
                 _ => Cow::from(file),
             };
             let label = format_label(&self.config.file_modified_label);
-            let name = get_repeated_file_path_from_diff_line(&self.diff_line)
-                .unwrap_or_else(|| "".to_string());
+            let name = get_repeated_file_path_from_diff_line(&self.diff_line).unwrap_or_default();
             let line = format!("{}{}", label, format_file(&name));
             write_generic_diff_header_header_line(
                 &line,
@@ -374,6 +372,15 @@ fn get_repeated_file_path_from_diff_line(line: &str) -> Option<String> {
     None
 }
 
+fn remove_surrounding_quotes(path: &str) -> &str {
+    if path.starts_with('"') && path.ends_with('"') {
+        // Indexing into the UTF-8 string is safe because of the previous test
+        &path[1..path.len() - 1]
+    } else {
+        path
+    }
+}
+
 fn _parse_file_path(s: &str, git_diff_name: bool) -> String {
     // It appears that, if the file name contains a space, git appends a tab
     // character in the diff metadata lines, e.g.
@@ -382,13 +389,15 @@ fn _parse_file_path(s: &str, git_diff_name: bool) -> String {
     // index·d00491f..0cfbf08·100644␊
     // ---·a/a·b├──┤␊
     // +++·b/c·d├──┤␊
-    match s.strip_suffix('\t').unwrap_or(s) {
+    let path = match s.strip_suffix('\t').unwrap_or(s) {
         path if path == "/dev/null" => "/dev/null",
         path if git_diff_name && DIFF_PREFIXES.iter().any(|s| path.starts_with(s)) => &path[2..],
         path if git_diff_name => path,
         path => path.split('\t').next().unwrap_or(""),
-    }
-    .to_string()
+    };
+    // When a path contains non-ASCII characters, a backslash, or a quote then it is quoted,
+    // so remove these quotes. Characters may also be escaped, but these are left as-is.
+    remove_surrounding_quotes(path).to_string()
 }
 
 pub fn get_file_change_description_from_file_paths(
@@ -550,6 +559,11 @@ mod tests {
         assert_eq!(
             parse_diff_header_line("+++ src/delta.rs", true),
             ("src/delta.rs".to_string(), FileEvent::Change)
+        );
+
+        assert_eq!(
+            parse_diff_header_line("+++ \".\\delta.rs\"", true),
+            (".\\delta.rs".to_string(), FileEvent::Change)
         );
     }
 
