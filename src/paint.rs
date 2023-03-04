@@ -82,7 +82,7 @@ impl<'p> Painter<'p> {
             ))
         } else if config.side_by_side {
             // If line numbers are disabled in side-by-side then the data is still used
-            // for width calculaction and to pad odd width to even, see `UseFullPanelWidth`
+            // for width calculation and to pad odd width to even, see `UseFullPanelWidth`
             // for details.
             Some(line_numbers::LineNumbersData::empty_for_sbs(
                 panel_width_fix,
@@ -806,7 +806,7 @@ pub fn paint_file_path_with_line_number(
             if !file_with_line_number.is_empty() {
                 file_with_line_number.push(ansi_term::ANSIString::from(separator));
             }
-            file_with_line_number.push(line_number_style.paint(format!("{}", line_number)))
+            file_with_line_number.push(line_number_style.paint(format!("{line_number}")))
         }
     }
     if terminate_with_separator {

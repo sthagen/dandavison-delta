@@ -264,7 +264,7 @@ fn parse_command_line<'a>(args: impl Iterator<Item = &'a str>) -> CommandLine {
         } else if s.starts_with("--") {
             long_options.insert(s.split('=').next().unwrap().to_owned());
         } else if let Some(suffix) = s.strip_prefix('-') {
-            short_options.extend(suffix.chars().map(|c| format!("-{}", c)));
+            short_options.extend(suffix.chars().map(|c| format!("-{c}")));
         } else {
             last_arg = Some(s);
         }
@@ -1170,7 +1170,7 @@ pub mod tests {
 
     #[test]
     fn test_process_calling_cmdline() {
-        // Github runs CI tests for arm under qemu where where sysinfo can not find the parent process.
+        // GitHub runs CI tests for arm under qemu where sysinfo can not find the parent process.
         if std::env::vars().any(|(key, _)| key == "CROSS_RUNNER" || key == "QEMU_LD_PREFIX") {
             return;
         }

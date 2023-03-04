@@ -60,7 +60,7 @@ mod tests {
         // In addition to the background color, the code has language syntax highlighting.
         let config = integration_test_utils::make_config_from_args(&[]);
         let output = integration_test_utils::get_line_of_code_from_delta(
-            &ADDED_FILE_INPUT,
+            ADDED_FILE_INPUT,
             14,
             "class X:",
             &config,
@@ -1604,7 +1604,7 @@ src/align.rs:71: impl<'a> Alignment<'a> { │
     fn test_hyperlinks_commit_link_format() {
         // If commit-style is not set then the commit line is handled in raw
         // mode, in which case we only format hyperlinks if output is a tty;
-        // this causes the test to fail on Github Actions, but pass locally
+        // this causes the test to fail on GitHub Actions, but pass locally
         // if output is left going to the screen.
         DeltaTest::with_args(&[
                 "--commit-style",

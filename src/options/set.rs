@@ -22,9 +22,9 @@ macro_rules! set_options {
     $opt:expr, $builtin_features:expr, $git_config:expr, $arg_matches:expr, $expected_option_name_map:expr, $check_names:expr) => {
         let mut option_names = HashSet::new();
         $(
-            let kebab_case_field_name = stringify!($field_ident).replace("_", "-");
-            let option_name = $expected_option_name_map[kebab_case_field_name.as_str()];
-            if !$crate::config::user_supplied_option(&kebab_case_field_name, $arg_matches) {
+            let field_name = stringify!($field_ident);
+            let option_name = &$expected_option_name_map[field_name];
+            if !$crate::config::user_supplied_option(&field_name, $arg_matches) {
                 if let Some(value) = $crate::options::get::get_option_value(
                     option_name,
                     &$builtin_features,
@@ -35,7 +35,7 @@ macro_rules! set_options {
                 }
             }
             if $check_names {
-                option_names.insert(option_name);
+                option_names.insert(option_name.as_str());
             }
         )*
         if $check_names {
@@ -44,15 +44,16 @@ macro_rules! set_options {
                 "diff-highlight", // Does not exist as a flag on config
                 "diff-so-fancy", // Does not exist as a flag on config
                 "features",  // Processed differently
-                "help", // automatically added by clap
                 // Set prior to the rest
                 "no-gitconfig",
                 "dark",
                 "light",
                 "syntax-theme",
-                "version", // automatically added by clap
             ]);
-            let expected_option_names: HashSet<_> = $expected_option_name_map.values().cloned().collect();
+            let expected_option_names: HashSet<_> = $expected_option_name_map
+                .values()
+                .map(String::as_str)
+                .collect();
 
             if option_names != expected_option_names {
                 $crate::config::delta_unreachable(
@@ -88,7 +89,7 @@ pub fn set_options(
 
     // --color-only is used for interactive.diffFilter (git add -p) and side-by-side cannot be used
     // there (does not emit lines in 1-1 correspondence with raw git output). See #274.
-    if config::user_supplied_option("color-only", arg_matches) {
+    if config::user_supplied_option("color_only", arg_matches) {
         builtin_features.remove("side-by-side");
     }
 
@@ -101,12 +102,12 @@ pub fn set_options(
     // HACK: make minus-line styles have syntax-highlighting iff side-by-side.
     if features.contains(&"side-by-side".to_string()) {
         let prefix = "normal ";
-        if !config::user_supplied_option("minus-style", arg_matches)
+        if !config::user_supplied_option("minus_style", arg_matches)
             && opt.minus_style.starts_with(prefix)
         {
             opt.minus_style = format!("syntax {}", &opt.minus_style[prefix.len()..]);
         }
-        if !config::user_supplied_option("minus-emph-style", arg_matches)
+        if !config::user_supplied_option("minus_emph_style", arg_matches)
             && opt.minus_emph_style.starts_with(prefix)
         {
             opt.minus_emph_style = format!("syntax {}", &opt.minus_emph_style[prefix.len()..]);
@@ -115,7 +116,7 @@ pub fn set_options(
 
     // Handle options which default to an arbitrary git config value.
     // TODO: incorporate this logic into the set_options macro.
-    if !config::user_supplied_option("whitespace-error-style", arg_matches) {
+    if !config::user_supplied_option("whitespace_error_style", arg_matches) {
         opt.whitespace_error_style = if let Some(git_config) = git_config {
             git_config.get::<String>("color.diff.whitespace")
         } else {
@@ -251,7 +252,7 @@ fn set__light__dark__syntax_theme__options(
     opt: &mut cli::Opt,
     git_config: &mut Option<GitConfig>,
     arg_matches: &clap::ArgMatches,
-    option_names: &HashMap<&str, &str>,
+    option_names: &HashMap<String, String>,
 ) {
     let validate_light_and_dark = |opt: &cli::Opt| {
         if opt.light && opt.dark {
@@ -432,7 +433,7 @@ fn gather_features_recursively(
     } else {
         features.push_front(feature.to_string());
     }
-    if let Some(child_features) = git_config.get::<String>(&format!("delta.{}.features", feature)) {
+    if let Some(child_features) = git_config.get::<String>(&format!("delta.{feature}.features")) {
         for child_feature in split_feature_string(&child_features) {
             if !features.contains(&child_feature.to_string()) {
                 gather_features_recursively(
@@ -446,7 +447,7 @@ fn gather_features_recursively(
         }
     }
     gather_builtin_features_from_flags_in_gitconfig(
-        &format!("delta.{}", feature),
+        &format!("delta.{feature}"),
         features,
         builtin_features,
         opt,
@@ -464,8 +465,7 @@ fn gather_builtin_features_from_flags_in_gitconfig(
     git_config: &GitConfig,
 ) {
     for child_feature in builtin_features.keys() {
-        if let Some(true) = git_config.get::<bool>(&format!("{}.{}", git_config_key, child_feature))
-        {
+        if let Some(true) = git_config.get::<bool>(&format!("{git_config_key}.{child_feature}")) {
             gather_builtin_features_recursively(child_feature, features, builtin_features, opt);
         }
     }
@@ -532,8 +532,7 @@ impl FromStr for cli::InspectRawLines {
             "false" => Ok(Self::False),
             _ => {
                 fatal(format!(
-                    r#"Invalid value for inspect-raw-lines option: {}. Valid values are "true", and "false"."#,
-                    s
+                    r#"Invalid value for inspect-raw-lines option: {s}. Valid values are "true", and "false"."#,
                 ));
             }
         }
@@ -547,8 +546,7 @@ fn parse_paging_mode(paging_mode_string: &str) -> PagingMode {
         "auto" => PagingMode::QuitIfOneScreen,
         _ => {
             fatal(format!(
-                "Invalid value for --paging option: {} (valid values are \"always\", \"never\", and \"auto\")",
-                paging_mode_string
+                "Invalid value for --paging option: {paging_mode_string} (valid values are \"always\", \"never\", and \"auto\")",
             ));
         }
     }
@@ -567,16 +565,11 @@ fn parse_width_specifier(width_arg: &str, terminal_width: usize) -> Result<usize
         .map_err(|_| {
             let pos = if must_be_negative { " negative" } else { "n" };
             let subexpr = if subexpression {
-                format!(" (from {:?})", width_arg)
+                format!(" (from {width_arg:?})")
             } else {
                 "".into()
             };
-            format!(
-                "{:?}{subexpr} is not a{pos} integer",
-                width,
-                subexpr = subexpr,
-                pos = pos
-            )
+            format!("{width:?}{subexpr} is not a{pos} integer")
         })
     };
 
@@ -596,7 +589,7 @@ fn parse_width_specifier(width_arg: &str, terminal_width: usize) -> Result<usize
             let b = parse(&width_arg[index..], true, true)?;
             (a + b)
                 .try_into()
-                .map_err(|_| format!("expression {:?} is not positive", width_arg))?
+                .map_err(|_| format!("expression {width_arg:?} is not positive"))?
         }
     };
 
@@ -617,7 +610,7 @@ fn set_widths_and_isatty(opt: &mut cli::Opt) {
         Some("variable") => (cli::Width::Variable, false),
         Some(width) => {
             let width = parse_width_specifier(width, opt.computed.available_terminal_width)
-                .unwrap_or_else(|err| fatal(format!("Invalid value for width: {}", err)));
+                .unwrap_or_else(|err| fatal(format!("Invalid value for width: {err}")));
             (cli::Width::Fixed(width), true)
         }
         None => (
@@ -776,7 +769,7 @@ pub mod tests {
         assert_eq!(opt.line_numbers_right_format, "xxxyyyzzz");
         assert_eq!(opt.line_numbers_right_style, "black black");
         assert_eq!(opt.line_numbers_zero_style, "black black");
-        assert_eq!(opt.max_line_distance, 77 as f64);
+        assert_eq!(opt.max_line_distance, 77.0);
         assert_eq!(opt.max_line_length, 77);
         assert_eq!(opt.minus_emph_style, "black black");
         assert_eq!(opt.minus_empty_line_marker_style, "black black");
