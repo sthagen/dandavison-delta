@@ -15,7 +15,7 @@ name = "delta"
 path = "src/main.rs"
 
 [dependencies]
-bat = { version = "0.21.0", default-features = false, features = ["regex-onig"] }
+bat = { version = "0.22.1", default-features = false, features = ["regex-onig"] }
 chrono = "0.4.19"
 chrono-humanize = "0.2.1"
 ansi_colours = "1.0.4"
