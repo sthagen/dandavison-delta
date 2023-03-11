@@ -6,12 +6,6 @@ use regex::Regex;
 
 use crate::errors::*;
 
-#[derive(Clone, Debug)]
-pub enum GitConfigEntry {
-    Style(String),
-    GitRemote(GitRemoteRepo),
-}
-
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum GitRemoteRepo {
     GitHub { slug: String },

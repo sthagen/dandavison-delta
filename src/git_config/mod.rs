@@ -1,20 +1,20 @@
-mod git_config_entry;
+mod remote;
 
-pub use git_config_entry::{GitConfigEntry, GitRemoteRepo};
+pub use remote::GitRemoteRepo;
 
 use crate::env::DeltaEnv;
 use regex::Regex;
 use std::collections::HashMap;
-#[cfg(test)]
 use std::path::Path;
+use std::str::FromStr;
 
 use lazy_static::lazy_static;
 
 pub struct GitConfig {
-    pub config: git2::Config,
+    config: git2::Config,
     config_from_env_var: HashMap<String, String>,
     pub enabled: bool,
-    pub repo: Option<git2::Repository>,
+    repo: Option<git2::Repository>,
     // To make GitConfig cloneable when testing (in turn to make Config cloneable):
     #[cfg(test)]
     path: std::path::PathBuf,
@@ -64,9 +64,39 @@ impl GitConfig {
         }
     }
 
+    #[cfg(not(test))]
+    pub fn try_create_from_path(env: &DeltaEnv, path: &String) -> Self {
+        use crate::fatal;
+
+        let config = git2::Config::open(Path::new(path));
+
+        match config {
+            Ok(mut config) => {
+                let config = config.snapshot().unwrap_or_else(|err| {
+                    fatal(format!("Failed to read git config: {err}"));
+                });
+
+                Self {
+                    config,
+                    config_from_env_var: parse_config_from_env_var(env),
+                    repo: None,
+                    enabled: true,
+                }
+            }
+            Err(e) => {
+                fatal(format!("Failed to read git config: {}", e.message()));
+            }
+        }
+    }
+
     #[cfg(test)]
     pub fn try_create(_env: &DeltaEnv) -> Option<Self> {
         unreachable!("GitConfig::try_create() is not available when testing");
+    }
+
+    #[cfg(test)]
+    pub fn try_create_from_path(_env: &DeltaEnv, _path: &String) -> Self {
+        unreachable!("GitConfig::try_create_from_path() is not available when testing");
     }
 
     #[cfg(test)]
@@ -92,6 +122,27 @@ impl GitConfig {
             T::git_config_get(key, self)
         } else {
             None
+        }
+    }
+
+    pub fn get_remote_url(&self) -> Option<GitRemoteRepo> {
+        self.repo
+            .as_ref()?
+            .find_remote("origin")
+            .ok()?
+            .url()
+            .and_then(|url| GitRemoteRepo::from_str(url).ok())
+    }
+
+    pub fn for_each<F>(&self, regex: &str, mut f: F)
+    where
+        F: FnMut(&str, Option<&str>),
+    {
+        let mut entries = self.config.entries(Some(regex)).unwrap();
+        while let Some(entry) = entries.next() {
+            let entry = entry.unwrap();
+            let name = entry.name().unwrap();
+            f(name, entry.value());
         }
     }
 }

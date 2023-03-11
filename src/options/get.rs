@@ -1,5 +1,3 @@
-use lazy_static::lazy_static;
-use regex::Regex;
 use std::collections::HashMap;
 
 use crate::cli;
@@ -11,7 +9,7 @@ use ProvenancedOptionValue::*;
 // Look up a value of type `T` associated with `option name`. The search rules are:
 //
 // 1. If there is a value associated with `option_name` in the main [delta] git config
-//    section, then stop searching and return that value.
+//    section, then stop searching and return that value (steps 2 and 3 are not executed at all).
 //
 // 2. For each feature in the ordered list of enabled features:
 //
@@ -40,25 +38,21 @@ where
     T::get_option_value(option_name, builtin_features, opt, git_config)
 }
 
-lazy_static! {
-    static ref GIT_CONFIG_THEME_REGEX: Regex = Regex::new(r"^delta\.(.+)\.(light|dark)$").unwrap();
-}
+static GIT_CONFIG_THEME_REGEX: &str = r#"^delta\.(.+)\.(light|dark)$"#;
 
 pub fn get_themes(git_config: Option<git_config::GitConfig>) -> Vec<String> {
     let mut themes: Vec<String> = Vec::new();
     let git_config = git_config.unwrap();
-    let mut entries = git_config.config.entries(None).unwrap();
-    while let Some(e) = entries.next() {
-        let entry = e.unwrap();
-        let entry_name = entry.name().unwrap();
-        let caps = GIT_CONFIG_THEME_REGEX.captures(entry_name);
-        if let Some(caps) = caps {
-            let name = caps.get(1).map_or("", |m| m.as_str()).to_string();
-            if !themes.contains(&name) {
-                themes.push(name)
+    git_config.for_each(GIT_CONFIG_THEME_REGEX, |name, _| {
+        if let Some(name) = name.strip_prefix("delta.") {
+            if let Some((name, _)) = name.rsplit_once('.') {
+                let name = name.to_owned();
+                if !themes.contains(&name) {
+                    themes.push(name);
+                }
             }
         }
-    }
+    });
     themes.sort_by_key(|a| a.to_lowercase());
     themes
 }
