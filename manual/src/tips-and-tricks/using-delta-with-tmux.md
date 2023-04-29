@@ -7,3 +7,5 @@ set -ga terminal-overrides ",xterm-256color:Tc"
 ```
 
 and you may then need to quit tmux completely for it to take effect.
+
+If colors look wrong, then see the page on [truecolor/24-bit color](./24-bit-color-truecolor.md) to ensure that this is working correctly.
