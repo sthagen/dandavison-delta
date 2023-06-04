@@ -8,7 +8,7 @@ edition = "2018"
 homepage = "https://github.com/dandavison/delta"
 license = "MIT"
 repository = "https://github.com/dandavison/delta"
-version = "0.15.1"
+version = "0.16.5"
 
 [[bin]]
 name = "delta"
@@ -16,7 +16,7 @@ path = "src/main.rs"
 
 [dependencies]
 bat = { version = "0.22.1", default-features = false, features = ["regex-onig"] }
-chrono = "0.4.23"
+chrono = "0.4.26"
 chrono-humanize = "0.2.2"
 ansi_colours = "1.2.1"
 ansi_term = "0.12.1"
@@ -25,18 +25,18 @@ atty = "0.2.14"
 bitflags = "2.2.1"
 box_drawing = "0.1.2"
 bytelines = "=2.2.2" # Pin version until its tokio and futures dependencies are optional.
-clap = { version = "4.1.8", features = ["derive", "help", "usage", "error-context", "wrap_help"] }
+clap = { version = "4.1.11", features = ["derive", "help", "usage", "error-context", "wrap_help"] }
 console = "0.15.0"
 ctrlc = "3.2.5"
-dirs = "4.0.0"
+dirs = "5.0.1"
 grep-cli = "0.1.7"
 itertools = "0.10.5"
 lazy_static = "1.4"
-palette = "0.6.1"
+palette = "0.7.2"
 pathdiff = "0.2.1"
 regex = "1.7.1"
-serde = { version = "1.0.152", features = ["derive"] }
-serde_json = "1.0.93"
+serde = { version = "1.0.163", features = ["derive"] }
+serde_json = "1.0.96"
 shell-words = "1.0.0"
 smol_str = "0.1.24"
 syntect = "5.0.0"
@@ -46,12 +46,12 @@ vte = "0.11.0"
 xdg = "2.4.1"
 
 [dependencies.git2]
-version = "0.16.1"
+version = "0.17.2"
 default-features = false
 features = []
 
 [dependencies.sysinfo]
-version = "0.28.2"
+version = "0.29.0"
 # no default features to disable the use of threads
 default-features = false
 features = []
