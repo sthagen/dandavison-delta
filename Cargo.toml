@@ -8,14 +8,14 @@ edition = "2018"
 homepage = "https://github.com/dandavison/delta"
 license = "MIT"
 repository = "https://github.com/dandavison/delta"
-version = "0.16.5"
+version = "0.17.0"
 
 [[bin]]
 name = "delta"
 path = "src/main.rs"
 
 [dependencies]
-bat = { version = "0.23.0", default-features = false, features = [
+bat = { version = "0.24.0", default-features = false, features = [
     "minimal-application",
     "paging",
     "regex-onig",
