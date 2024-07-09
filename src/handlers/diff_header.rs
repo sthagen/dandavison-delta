@@ -84,12 +84,11 @@ impl<'a> StateMachine<'a> {
             return Ok(false);
         }
 
-        let (path_or_mode, file_event) =
+        let (mut path_or_mode, file_event) =
             parse_diff_header_line(&self.line, self.source == Source::GitDiff);
 
-        self.minus_file = utils::path::relativize_path_maybe(&path_or_mode, self.config)
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or(path_or_mode);
+        utils::path::relativize_path_maybe(&mut path_or_mode, self.config);
+        self.minus_file = path_or_mode;
         self.minus_file_event = file_event;
 
         if self.source == Source::DiffUnified {
@@ -121,12 +120,11 @@ impl<'a> StateMachine<'a> {
             return Ok(false);
         }
         let mut handled_line = false;
-        let (path_or_mode, file_event) =
+        let (mut path_or_mode, file_event) =
             parse_diff_header_line(&self.line, self.source == Source::GitDiff);
 
-        self.plus_file = utils::path::relativize_path_maybe(&path_or_mode, self.config)
-            .map(|p| p.to_string_lossy().into_owned())
-            .unwrap_or(path_or_mode);
+        utils::path::relativize_path_maybe(&mut path_or_mode, self.config);
+        self.plus_file = path_or_mode;
         self.plus_file_event = file_event;
         self.painter
             .set_syntax(get_filename_from_diff_header_line_file_path(
@@ -470,6 +468,8 @@ pub fn get_file_change_description_from_file_paths(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::tests::integration_test_utils::{make_config_from_args, DeltaTest};
+    use insta::assert_snapshot;
 
     #[test]
     fn test_get_filename_from_marker_line() {
@@ -638,5 +638,44 @@ mod tests {
                 "diff --git a/.config/Code - Insiders/User/settings.json b/.config/Code - Insiders/User/settings.json"),
             Some(".config/Code - Insiders/User/settings.json".to_string())
         );
+    }
+
+    pub const BIN_AND_TXT_FILE_ADDED: &str = "\
+diff --git a/BIN b/BIN
+new file mode 100644
+index 0000000..a5d0c46
+Binary files /dev/null and b/BIN differ
+diff --git a/TXT b/TXT
+new file mode 100644
+index 0000000..323fae0
+--- /dev/null
++++ b/TXT
+@@ -0,0 +1 @@
++plain text";
+
+    #[test]
+    fn test_diff_header_relative_paths() {
+        // rustfmt ignores the assert macro arguments, so do the setup outside
+        let mut cfg = make_config_from_args(&["--relative-paths", "-s"]);
+        cfg.cwd_relative_to_repo_root = Some("src/utils/".into());
+        let result = DeltaTest::with_config(&cfg)
+            .with_input(BIN_AND_TXT_FILE_ADDED)
+            .output;
+        // convert windows '..\' to unix '../' paths
+        insta::with_settings!({filters => vec![(r"\.\.\\", "../")]}, {
+            assert_snapshot!(result, @r###"
+
+            added: ../../BIN (binary file)
+            ───────────────────────────────────────────
+
+            added: ../../TXT
+            ───────────────────────────────────────────
+
+            ───┐
+            1: │
+            ───┘
+            │    │                │  1 │plain text
+            "###)
+        });
     }
 }
