@@ -1,5 +1,5 @@
 # TODO:
-# - Update binary assets from bat
+# - Check for a bat upgrade as it might bring new language support/themes
 # - Update README prior to release
 # - Update help text in README, with BAT_THEME unset
 
@@ -8,8 +8,7 @@ release: \
 	check-environment \
 	bump-version \
 	create-github-release \
-	bump-version-in-documentation-links \
-	bump-private-homebrew-formula
+	bump-version-in-documentation-links
 
 
 clean:
@@ -54,17 +53,6 @@ $(BUMP_VERSION_IN_DOCUMENTATION_LINKS_SENTINEL):
 	git add manual/src/full---help-output.md manual/src/installation.md
 	git commit -m "Bump version in links to executables"
 	touch $(BUMP_VERSION_IN_DOCUMENTATION_LINKS_SENTINEL)
-
-
-BUMP_PRIVATE_HOMEBREW_FORMULA_SENTINEL=.make-sentinels/bump-private-homebrew-formula
-bump-private-homebrew-formula: $(BUMP_PRIVATE_HOMEBREW_FORMULA_SENTINEL)
-$(BUMP_PRIVATE_HOMEBREW_FORMULA_SENTINEL):
-	sed -i -E "s,$$DELTA_OLD_VERSION,$$DELTA_NEW_VERSION,g" HomeBrewFormula/git-delta.rb
-	make hash
-	@echo \# modify hashes in HomeBrewFormula/git-delta.rb
-	git add HomeBrewFormula/git-delta.rb
-	git commit -m "Bump version in private Homebrew formula"
-	touch $(BUMP_PRIVATE_HOMEBREW_FORMULA_SENTINEL)
 
 
 .PHONY: \
