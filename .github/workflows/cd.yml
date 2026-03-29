@@ -18,19 +18,19 @@ jobs:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             use-cross: false
-          - os: ubuntu-latest
+          - os: ubuntu-22.04
             target: x86_64-unknown-linux-gnu
             use-cross: false
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
             use-cross: true
-          - os: ubuntu-latest
+          - os: ubuntu-22.04
             target: i686-unknown-linux-gnu
             use-cross: true
-          - os: ubuntu-latest
+          - os: ubuntu-22.04
             target: arm-unknown-linux-gnueabihf
             use-cross: true
-          - os: ubuntu-latest
+          - os: ubuntu-22.04
             target: aarch64-unknown-linux-gnu
             use-cross: true
 
@@ -81,11 +81,19 @@ jobs:
       - name: Releasing assets
         uses: softprops/action-gh-release@v2
         with:
+          draft: true
           files: |
             delta-*-${{ matrix.job.target }}.*
             git-delta*.deb
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+  verify-release:
+    needs: publish
+    uses: ./.github/workflows/verify-release.yml
+    with:
+      version: ${{ github.ref_name }}
+    secrets: inherit
 
   publish-to-cargo:
     name: Publishing to Cargo
